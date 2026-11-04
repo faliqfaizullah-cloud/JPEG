@@ -236,14 +236,14 @@ class PlayerState(private val ctx: Context) {
         prefs.edit().putString("eq", eqLevels.joinToString(",")).apply()
     }
     fun setEqAll(l: List<Int>) { l.forEachIndexed { i, v -> setEq(i, v.coerceIn(eqMin, eqMax)) } }
-    fun setBass(v: Int) { bass = v; try { bb?.setStrength(v.toShort()) } catch (e: Exception) { }; prefs.edit().putInt("bass", v).apply() }
+    fun updateBass(v: Int) { bass = v; try { bb?.setStrength(v.toShort()) } catch (e: Exception) { }; prefs.edit().putInt("bass", v).apply() }
 
     // ── look
     fun setAccent(c: Color) { Look.accent = c; prefs.edit().putInt("accent", c.toArgb()).apply() }
     fun setStyle(i: Int) { Look.style = i; prefs.edit().putInt("style", i).apply() }
     fun setBackdrop(b: Boolean) { Look.backdrop = b; prefs.edit().putBoolean("backdrop", b).apply() }
-    fun setShuffle(b: Boolean) { shuffle = b; prefs.edit().putBoolean("shuffle", b).apply() }
-    fun setRepeat(b: Boolean) { repeat = b; prefs.edit().putBoolean("repeat", b).apply() }
+    fun updateShuffle(b: Boolean) { shuffle = b; prefs.edit().putBoolean("shuffle", b).apply() }
+    fun updateRepeat(b: Boolean) { repeat = b; prefs.edit().putBoolean("repeat", b).apply() }
 
     // ── playback
     private fun applySpeed() {
@@ -602,7 +602,7 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
                 RoundBtn(50.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.prev() }) { Icon(3) }
                 RoundBtn(68.dp, Look.accent, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggle() }) { Icon(if (st.playing) 1 else 0, Color.Black, 26.dp) }
                 RoundBtn(50.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.next() }) { Icon(2) }
-                RoundBtn(46.dp, if (st.shuffle) Look.accent else Color(0xFF2A2A2D), { view.tap(); st.setShuffle(!st.shuffle) }) {
+                RoundBtn(46.dp, if (st.shuffle) Look.accent else Color(0xFF2A2A2D), { view.tap(); st.updateShuffle(!st.shuffle) }) {
                     Text("SH", color = if (st.shuffle) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 }
             }
@@ -741,8 +741,8 @@ fun StudioTab(st: PlayerState) {
         }
         Section("PLAYBACK") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pill("SHUFFLE", st.shuffle) { st.setShuffle(!st.shuffle) }
-                Pill("REPEAT ONE", st.repeat) { st.setRepeat(!st.repeat) }
+                Pill("SHUFFLE", st.shuffle) { st.updateShuffle(!st.shuffle) }
+                Pill("REPEAT ONE", st.repeat) { st.updateRepeat(!st.repeat) }
                 Pill("RESCAN") { scope.launch { st.scan() } }
             }
         }
@@ -763,7 +763,7 @@ fun StudioTab(st: PlayerState) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("BASS BOOST", color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.width(64.dp))
-                Slider(st.bass.toFloat(), { st.setBass(it.roundToInt()) }, valueRange = 0f..1000f,
+                Slider(st.bass.toFloat(), { st.updateBass(it.roundToInt()) }, valueRange = 0f..1000f,
                     colors = SliderDefaults.colors(thumbColor = Look.accent, activeTrackColor = Look.accent, inactiveTrackColor = Color(0xFF333336)))
             }
             Text("Applies from the next song if no sound change is heard.", color = Color.Gray, fontSize = 11.sp)

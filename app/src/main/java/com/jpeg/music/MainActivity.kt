@@ -5,6 +5,9 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.PlaybackParams
@@ -101,7 +104,70 @@ const val FAV = "Favorites"
 
 // ───────────── Data ─────────────
 
-data class Song(val id: Long, val title: String, val artist: String, val album: String, val duration: Int, val uri: android.net.Uri)
+data class Song(val id: Long, val title: String, val artist: String, val album: String, val duration: Int, val uri: android.net.Uri,
+                val name: String = "", val mime: String = "")
+
+data class Quality(val lossless: Boolean, val hires: Boolean, val label: String, val bits: Int, val rate: Int, val kbps: Int) {
+    fun tag() = if (hires) "HI-RES" else if (lossless) "LOSSLESS" else ""
+    fun detail(): String = buildString {
+        append(label)
+        if (bits > 0) append(" · ${bits}-bit")
+        if (rate > 0) append(if (rate % 1000 == 0) " · ${rate / 1000} kHz" else " · %.1f kHz".format(rate / 1000f))
+        if (!lossless && kbps > 0) append(" · $kbps kbps")
+    }
+}
+
+private val LOSSLESS_EXT = setOf("flac", "wav", "alac", "aiff", "aif", "ape", "wv")
+fun Song.isLossless(): Boolean {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return ext in LOSSLESS_EXT || mime.contains("flac") || mime.contains("wav") || mime.contains("aiff") || mime.contains("alac")
+}
+
+suspend fun analyze(ctx: Context, song: Song): Quality = withContext(Dispatchers.IO) {
+    var mime = ""; var rate = 0; var bits = 0; var kbps = 0
+    try {
+        val ex = MediaExtractor()
+        try {
+            ex.setDataSource(ctx, song.uri, null)
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                val m = f.getString(MediaFormat.KEY_MIME) ?: continue
+                if (m.startsWith("audio/")) {
+                    mime = m
+                    try { if (f.containsKey(MediaFormat.KEY_SAMPLE_RATE)) rate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE) } catch (e: Exception) { }
+                    try { if (f.containsKey(MediaFormat.KEY_BIT_RATE)) kbps = f.getInteger(MediaFormat.KEY_BIT_RATE) / 1000 } catch (e: Exception) { }
+                    try { if (f.containsKey("bits-per-sample")) bits = f.getInteger("bits-per-sample") } catch (e: Exception) { }
+                    break
+                }
+            }
+        } finally { ex.release() }
+    } catch (e: Exception) { }
+    try {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, song.uri)
+            if (Build.VERSION.SDK_INT >= 31) {
+                rate = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull() ?: rate
+                bits = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull() ?: bits
+            }
+            if (kbps == 0) kbps = (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0) / 1000
+        } finally { r.release() }
+    } catch (e: Exception) { }
+    val ext = song.name.substringAfterLast('.', "").lowercase()
+    val lossless = listOf("flac", "wav", "raw", "alac", "aiff", "ape", "wavpack").any { mime.contains(it) } || (mime.isEmpty() && song.isLossless())
+    val label = when {
+        mime.contains("flac") -> "FLAC"
+        mime.contains("wav") || mime.contains("raw") -> "WAV"
+        mime.contains("alac") -> "ALAC"
+        mime.contains("aiff") -> "AIFF"
+        mime.contains("mpeg") -> "MP3"
+        mime.contains("mp4a") || mime.contains("aac") -> "AAC"
+        mime.contains("vorbis") -> "OGG"
+        mime.contains("opus") -> "OPUS"
+        else -> ext.uppercase()
+    }
+    Quality(lossless, lossless && (rate > 48000 || bits >= 24), label, bits, rate, kbps)
+}
 
 object ArtCache { val map = HashMap<Long, ImageBitmap?>() }
 
@@ -157,6 +223,8 @@ class PlayerState(private val ctx: Context) {
     var sleepAt by mutableLongStateOf(0L)
     var tick by mutableLongStateOf(0L)
     var playlists by mutableStateOf(loadPl())
+    val quality = mutableStateMapOf<Long, Quality>()
+    var pure by mutableStateOf(prefs.getBoolean("pure", false))
     private var mp: MediaPlayer? = null
     private var eq: Equalizer? = null
     private var bb: BassBoost? = null
@@ -195,7 +263,8 @@ class PlayerState(private val ctx: Context) {
         val list = withContext(Dispatchers.IO) {
             val out = ArrayList<Song>()
             val proj = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST,
-                MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION)
+                MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION,
+                MediaStore.Audio.Media.DISPLAY_NAME, MediaStore.Audio.Media.MIME_TYPE)
             try {
                 ctx.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj,
                     "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 30000", null,
@@ -205,7 +274,7 @@ class PlayerState(private val ctx: Context) {
                         val artist = c.getString(2) ?: "Unknown artist"
                         out.add(Song(id, c.getString(1) ?: "Unknown", if (artist == "<unknown>") "Unknown artist" else artist,
                             c.getString(3) ?: "", c.getInt(4),
-                            ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)))
+                            ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), c.getString(5) ?: "", c.getString(6) ?: ""))
                     }
                 }
             } catch (e: Exception) { }
@@ -217,10 +286,27 @@ class PlayerState(private val ctx: Context) {
         if (index >= queue.size) index = 0
     }
 
+    // ── quality
+    suspend fun ensureQ(s: Song) { if (!quality.containsKey(s.id)) quality[s.id] = analyze(ctx, s) }
+    suspend fun analyzeAll() {
+        for (s in songs) {
+            if (quality.containsKey(s.id)) continue
+            val ext = s.name.substringAfterLast('.', "").lowercase()
+            if (s.isLossless() || ext == "m4a") quality[s.id] = analyze(ctx, s)
+        }
+    }
+    fun updatePure(b: Boolean) {
+        pure = b; prefs.edit().putBoolean("pure", b).apply()
+        val m = mp ?: return
+        if (b) releaseFx() else attachFx(m.audioSessionId)
+        if (playing) applySpeed()
+    }
+
     // ── fx
     private fun releaseFx() { try { eq?.release() } catch (e: Exception) { }; try { bb?.release() } catch (e: Exception) { }; eq = null; bb = null }
     private fun attachFx(sid: Int) {
         releaseFx()
+        if (pure) return
         try {
             val e = Equalizer(0, sid)
             e.enabled = true
@@ -248,7 +334,7 @@ class PlayerState(private val ctx: Context) {
     // ── playback
     private fun applySpeed() {
         val m = mp ?: return
-        try { val r = rpm / 33.3f; m.playbackParams = PlaybackParams().setSpeed(r).setPitch(r) } catch (e: Exception) { }
+        try { val r = if (pure) 1f else rpm / 33.3f; m.playbackParams = PlaybackParams().setSpeed(r).setPitch(r) } catch (e: Exception) { }
     }
     fun setSpeed(v: Float) { rpm = v; prefs.edit().putFloat("rpm", v).apply(); if (playing) applySpeed() }
 
@@ -460,6 +546,7 @@ fun App(st: PlayerState) {
 
     LaunchedEffect(Unit) { if (!granted) launcher.launch(perm) }
     LaunchedEffect(granted) { if (granted) st.scan() }
+    LaunchedEffect(st.songs) { st.analyzeAll() }
     LaunchedEffect(Unit) { while (true) { delay(150); st.refresh() } }
     LaunchedEffect(st.playing) {
         if (st.playing) {
@@ -538,6 +625,7 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
     val enter = remember { Animatable(0f) }
     LaunchedEffect(st.index, st.queue.size) { enter.snapTo(1f); enter.animateTo(0f, spring(0.62f, Spring.StiffnessLow)) }
     var lastSec by remember { mutableIntStateOf(0) }
+    LaunchedEffect(song?.id) { song?.let { st.ensureQ(it) } }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
@@ -557,6 +645,12 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
         Text(song.title.uppercase(), color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
             fontSize = 24.sp, lineHeight = 28.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
         Text(song.artist, color = Color(0xFFAAAAAA), fontSize = 13.sp, maxLines = 1, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
+        st.quality[song.id]?.let { q ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (q.tag().isNotEmpty()) { Badge(q); Spacer(Modifier.width(8.dp)) }
+                Text(q.detail(), color = Color(0xFF9A9A9A), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
+        }
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds()
             .pointerInput(st) {
@@ -613,7 +707,16 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
 // ───────────── Library & playlists ─────────────
 
 @Composable
-fun SongRow(s: Song, active: Boolean, onPlay: () -> Unit, onMore: () -> Unit) {
+fun Badge(q: Quality) {
+    val t = q.tag()
+    if (t.isEmpty()) return
+    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(if (q.hires) Color(0xFFFFC857) else Look.accent).padding(horizontal = 6.dp, vertical = 2.dp)) {
+        Text(t, color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+    }
+}
+
+@Composable
+fun SongRow(s: Song, active: Boolean, q: Quality?, onPlay: () -> Unit, onMore: () -> Unit) {
     val a = rememberArt(s)
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(6.dp, RoundedCornerShape(24.dp)).clip(RoundedCornerShape(24.dp))
         .background(if (active) Color(0xFF28282B) else Panel.copy(alpha = 0.9f)).clickable { onPlay() }.padding(8.dp),
@@ -622,7 +725,10 @@ fun SongRow(s: Song, active: Boolean, onPlay: () -> Unit, onMore: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(s.title, color = if (active) Look.accent else Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(s.artist + " · " + fmt(s.duration), color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (q != null && q.tag().isNotEmpty()) { Badge(q); Spacer(Modifier.width(6.dp)) }
+                Text(s.artist + " · " + fmt(s.duration), color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         Box(Modifier.size(40.dp).clip(CircleShape).clickable { onMore() }, contentAlignment = Alignment.Center) {
             Text("•••", color = Color.Gray, fontSize = 11.sp)
@@ -637,6 +743,10 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
     var openPl by remember { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf<Song?>(null) }
     var newDialog by remember { mutableStateOf(false) }
+    var qf by remember { mutableIntStateOf(0) }
+    val shown = st.songs.filter { x ->
+        when (qf) { 1 -> st.quality[x.id]?.lossless ?: x.isLossless(); 2 -> st.quality[x.id]?.hires == true; else -> true }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -645,10 +755,18 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
                     fontWeight = FontWeight.Bold, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${st.songs.size} songs · ${st.playlists.size} playlists", color = Color.Gray, fontSize = 11.sp)
                 Spacer(Modifier.height(10.dp))
+                if (sub == 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("ALL ${st.songs.size}", qf == 0) { qf = 0 }
+                        Pill("LOSSLESS ${st.quality.values.count { it.lossless }}", qf == 1) { qf = 1 }
+                        Pill("HI-RES ${st.quality.values.count { it.hires }}", qf == 2) { qf = 2 }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Pill("ALL SONGS", sub == 0) { sub = 0; openPl = null }
                     Pill("PLAYLISTS", sub == 1) { sub = 1; openPl = null }
-                    if (sub == 0) Pill("PLAY ALL") { st.playQueue(st.songs, 0); openPlayer() }
+                    if (sub == 0) Pill("PLAY ALL") { st.playQueue(shown, 0); openPlayer() }
                     if (sub == 1 && openPl == null) Pill("+ NEW") { newDialog = true }
                     if (sub == 1 && openPl != null) Pill("PLAY") { val l = st.songsOf(openPl!!); if (l.isNotEmpty()) { st.playQueue(l, 0); openPlayer() } }
                 }
@@ -657,8 +775,8 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
             if (sub == 0) {
                 if (st.songs.isEmpty()) Text(if (st.scanned) "No music found on this device." else "Scanning…", color = Color.Gray, modifier = Modifier.padding(20.dp))
                 LazyColumn(Modifier.fillMaxSize()) {
-                    itemsIndexed(st.songs, key = { _, s -> s.id }) { i, s ->
-                        SongRow(s, st.current?.id == s.id, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(st.songs, i); openPlayer() }, { menu = s })
+                    itemsIndexed(shown, key = { _, s -> s.id }) { i, s ->
+                        SongRow(s, st.current?.id == s.id, st.quality[s.id], { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(shown, i); openPlayer() }, { menu = s })
                     }
                 }
             } else if (openPl == null) {
@@ -689,7 +807,7 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
                 if (list.isEmpty()) Text("Empty. Tap ••• on any song and choose Add to $name.", color = Color.Gray, modifier = Modifier.padding(20.dp))
                 LazyColumn(Modifier.fillMaxSize()) {
                     itemsIndexed(list, key = { _, s -> s.id }) { i, s ->
-                        SongRow(s, st.current?.id == s.id, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(list, i); openPlayer() }, { menu = s })
+                        SongRow(s, st.current?.id == s.id, st.quality[s.id], { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(list, i); openPlayer() }, { menu = s })
                     }
                 }
             }
@@ -727,6 +845,7 @@ fun Swatch(c: Color, selected: Boolean, onClick: () -> Unit) {
 @Composable
 fun StudioTab(st: PlayerState) {
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Section("SPEED") {
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Dark).padding(vertical = 22.dp), horizontalArrangement = Arrangement.Center) {
@@ -745,6 +864,24 @@ fun StudioTab(st: PlayerState) {
                 Pill("REPEAT ONE", st.repeat) { st.updateRepeat(!st.repeat) }
                 Pill("RESCAN") { scope.launch { st.scan() } }
             }
+        }
+        Section("AUDIO QUALITY") {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val outRate = am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) ?: "?"
+            val ll = st.quality.values.count { it.lossless }
+            val hr = st.quality.values.count { it.hires }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Badge(Quality(true, true, "", 0, 0, 0)); Text("$hr files", color = Color.White, fontSize = 12.sp)
+                Spacer(Modifier.width(8.dp))
+                Badge(Quality(true, false, "", 0, 0, 0)); Text("$ll files", color = Color.White, fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(10.dp))
+            Pill("PURE MODE (NO EQ / SPEED FX)", st.pure) { st.updatePure(!st.pure) }
+            val clean = st.pure || (st.rpm == 33.3f && st.bass == 0 && st.eqLevels.all { it == 0 })
+            Text(if (clean) "Signal path: clean, no effects applied." else "Signal path: effects active (EQ, bass or speed).",
+                color = if (clean) Look.accent else Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
+            Text("Phone output mixer: $outRate Hz. Hi-Res files are decoded at full quality, but Android may resample them to this rate unless you use a USB DAC or a device with Hi-Res output.",
+                color = Color.Gray, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
         }
         Section("EQUALIZER") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

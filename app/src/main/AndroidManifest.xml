@@ -6,7 +6,7 @@
     <application android:label="JPEG" android:icon="@drawable/ic_jpeg" android:roundIcon="@drawable/ic_jpeg"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true"
-            android:screenOrientation="portrait"
+            android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

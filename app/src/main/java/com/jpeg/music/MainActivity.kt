@@ -45,7 +45,7 @@ private val G = mapOf(
 
 @Composable
 fun DotText(text: String, dot: Float = 5f, color: Color = Color.White) {
-    val w = text.sumOf { if (it == ':' || it == '.') 2 else 4 }
+    val w = text.map { if (it == ':' || it == '.') 2 else 4 }.sum()
     Canvas(Modifier.size((w * dot * 2.2f).dp.coerceAtLeast(1.dp), (5 * dot * 2.2f).dp)) {
         val step = size.height / 5f
         var x = 0f

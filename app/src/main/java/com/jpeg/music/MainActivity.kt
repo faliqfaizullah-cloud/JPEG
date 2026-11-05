@@ -76,6 +76,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -692,6 +693,8 @@ fun NameDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
 @Composable
 fun App(st: PlayerState) {
     val ctx = LocalContext.current
+    val social = remember { SocialHub.get(ctx) }
+    val imeOn = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var tab by remember { mutableIntStateOf(0) }
     var angle by remember { mutableFloatStateOf(0f) }
     val perm = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -706,6 +709,12 @@ fun App(st: PlayerState) {
             notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
     LaunchedEffect(st.songs) { st.analyzeAll() }
+    LaunchedEffect(st.current?.id, st.playing, social.me) {
+        if (social.signedIn) {
+            delay(1200)
+            social.setNow(st.current?.title ?: "", st.current?.artist ?: "", st.playing && st.current != null)
+        }
+    }
     LaunchedEffect(Unit) { while (true) { delay(150); st.refresh() } }
     LaunchedEffect(st.playing) {
         if (st.playing) {
@@ -720,7 +729,7 @@ fun App(st: PlayerState) {
     val art = rememberArt(st.current)
     Box(Modifier.fillMaxSize().background(Dark)) {
         if (art != null && Look.backdrop) Image(art, null, Modifier.fillMaxSize().blur(50.dp).alpha(0.35f), contentScale = ContentScale.Crop)
-        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).padding(top = 28.dp, bottom = if (tab == 0) 96.dp else 160.dp)) {
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).padding(top = 28.dp, bottom = if (imeOn) 0.dp else if (tab == 0) 96.dp else 160.dp)) {
             if (!granted) Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
                 Text("Allow access to your music", color = Color.White, fontSize = 16.sp)
                 Spacer(Modifier.height(14.dp))
@@ -729,10 +738,11 @@ fun App(st: PlayerState) {
                 0 -> PlayerTab(st, art, angle)
                 1 -> LibraryTab(st) { tab = 0 }
                 2 -> OnlineTab(st) { tab = 0 }
+                3 -> FriendsTab(social, st)
                 else -> StudioTab(st)
             }
         }
-        Column(Modifier.align(Alignment.BottomCenter).padding(start = 14.dp, end = 14.dp, bottom = 18.dp)) {
+        if (!imeOn) Column(Modifier.align(Alignment.BottomCenter).padding(start = 14.dp, end = 14.dp, bottom = 18.dp)) {
             if (tab != 0 && st.current != null) { MiniPlayer(st, art, angle) { tab = 0 }; Spacer(Modifier.height(10.dp)) }
             NavBar(tab) { tab = it }
         }
@@ -744,10 +754,10 @@ fun NavBar(tab: Int, onTab: (Int) -> Unit) {
     val v = LocalView.current
     Row(Modifier.fillMaxWidth().shadow(16.dp, RoundedCornerShape(32.dp)).clip(RoundedCornerShape(32.dp))
         .background(Color(0xF0222225)).padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-        listOf("PLAYER", "LIBRARY", "ONLINE", "STUDIO").forEachIndexed { i, label ->
+        listOf("PLAYER", "LIBRARY", "ONLINE", "FRIENDS", "STUDIO").forEachIndexed { i, label ->
             Box(Modifier.weight(1f).clip(RoundedCornerShape(26.dp)).background(if (tab == i) Look.accent else Color.Transparent)
                 .clickable { v.tap(); onTab(i) }.padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
-                Text(label, color = if (tab == i) Color.Black else Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                Text(label, color = if (tab == i) Color.Black else Color.White, fontSize = 9.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
             }
         }
     }

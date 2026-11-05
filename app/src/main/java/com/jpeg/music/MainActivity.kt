@@ -47,6 +47,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -113,7 +116,8 @@ const val FAV = "Favorites"
 // ───────────── Data ─────────────
 
 data class Song(val id: Long, val title: String, val artist: String, val album: String, val duration: Int, val uri: android.net.Uri,
-                val name: String = "", val mime: String = "")
+                val name: String = "", val mime: String = "",
+                val artUrl: String = "", val live: Boolean = false, val online: Boolean = false, val info: String = "")
 
 data class Quality(val lossless: Boolean, val hires: Boolean, val label: String, val bits: Int, val rate: Int, val kbps: Int) {
     fun tag() = if (hires) "HI-RES" else if (lossless) "LOSSLESS" else ""
@@ -180,6 +184,7 @@ suspend fun analyze(ctx: Context, song: Song): Quality = withContext(Dispatchers
 object ArtCache { val map = HashMap<Long, ImageBitmap?>() }
 
 suspend fun loadArt(ctx: Context, s: Song): ImageBitmap? = withContext(Dispatchers.IO) {
+    if (s.online) return@withContext Net.fetchImage(s.artUrl)
     try {
         val r = MediaMetadataRetriever()
         try {
@@ -233,6 +238,9 @@ class PlayerState(private val ctx: Context) {
     var playlists by mutableStateOf(loadPl())
     val quality = mutableStateMapOf<Long, Quality>()
     var pure by mutableStateOf(prefs.getBoolean("pure", false))
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    private var pending: MediaPlayer? = null
     private var mp: MediaPlayer? = null
     private var eq: Equalizer? = null
     private var bb: BassBoost? = null
@@ -295,7 +303,10 @@ class PlayerState(private val ctx: Context) {
     }
 
     // ── quality
-    suspend fun ensureQ(s: Song) { if (!quality.containsKey(s.id)) quality[s.id] = analyze(ctx, s) }
+    suspend fun ensureQ(s: Song) {
+        if (quality.containsKey(s.id)) return
+        quality[s.id] = if (s.online) Quality(false, false, s.info.ifBlank { "STREAM" }, 0, 0, 0) else analyze(ctx, s)
+    }
     suspend fun analyzeAll() {
         for (s in songs) {
             if (quality.containsKey(s.id)) continue
@@ -374,46 +385,65 @@ class PlayerState(private val ctx: Context) {
 
     private fun applySpeed() {
         val m = mp ?: return
+        if (current?.live == true) return
         try { val r = if (pure) 1f else rpm / 33.3f; m.playbackParams = PlaybackParams().setSpeed(r).setPitch(r) } catch (e: Exception) { }
     }
     fun setSpeed(v: Float) { rpm = v; prefs.edit().putFloat("rpm", v).apply(); if (playing) applySpeed(); changed() }
 
-    private fun newPlayer(s: Song): MediaPlayer {
+    private fun newPlayer(s: Song, async: Boolean): MediaPlayer {
         val m = MediaPlayer()
         m.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
         m.setWakeMode(ctx, PowerManager.PARTIAL_WAKE_LOCK)
         m.setDataSource(ctx, s.uri)
         m.setOnCompletionListener { p -> onDone(p) }
-        m.prepare()
+        m.setOnErrorListener { p, _, _ ->
+            if (p === pending || p === mp) { loading = false; playing = false; error = "Can't play this one. Check your connection."; changed() }
+            true
+        }
+        if (!async) m.prepare()
         return m
     }
     private fun onDone(p: MediaPlayer) { if (p !== mp) return; if (repeat) play(index) else next() }
 
     fun playQueue(list: List<Song>, i: Int) { if (list.isEmpty()) return; queue = list; play(i) }
 
+    private fun startPlayer(m: MediaPlayer) {
+        attachFx(m.audioSessionId)
+        focusOn()
+        m.start()
+        mp = m
+        loading = false
+        playing = true
+        pos = 0
+        if (rpm != 33.3f) applySpeed()
+        ensureService()
+        h.removeCallbacks(ticker); h.post(ticker)
+        changed()
+    }
+
     fun play(i: Int) {
         if (queue.isEmpty()) return
         release()
         index = i.coerceIn(0, queue.size - 1)
+        error = null
+        val s = queue[index]
         try {
-            val m = newPlayer(queue[index])
-            attachFx(m.audioSessionId)
-            focusOn()
-            m.start()
-            mp = m
-            playing = true
-            pos = 0
-            if (rpm != 33.3f) applySpeed()
-            ensureService()
-            h.removeCallbacks(ticker); h.post(ticker)
-        } catch (e: Exception) { playing = false }
-        changed()
+            if (s.online) {
+                loading = true; playing = false; pos = 0
+                val m = newPlayer(s, true)
+                pending = m
+                m.setOnPreparedListener { p -> if (p === pending) { pending = null; startPlayer(p) } }
+                m.prepareAsync()
+                ensureService()
+                changed()
+            } else startPlayer(newPlayer(s, false))
+        } catch (e: Exception) { playing = false; loading = false; changed() }
     }
 
     private fun crossfadeTo(n: Int) {
         try {
             val old = mp
-            val m = newPlayer(queue[n])
+            val m = newPlayer(queue[n], false)
             m.setVolume(0f, 0f)
             attachFx(m.audioSessionId)
             m.start()
@@ -443,6 +473,7 @@ class PlayerState(private val ctx: Context) {
     }
 
     fun toggle() {
+        if (loading) return
         val m = mp
         if (m == null) { if (queue.isEmpty()) queue = songs; play(index); return }
         if (playing) {
@@ -466,7 +497,7 @@ class PlayerState(private val ctx: Context) {
     private fun computeNext(): Int =
         if (shuffle && queue.size > 1) { var r: Int; do { r = queue.indices.random() } while (r == index); r } else (index + 1) % queue.size
 
-    private fun go(n: Int) { if (crossfade > 0 && playing && mp != null) crossfadeTo(n) else play(n) }
+    private fun go(n: Int) { if (crossfade > 0 && playing && mp != null && !queue[n].online) crossfadeTo(n) else play(n) }
 
     fun next() { if (queue.isEmpty()) return; go(computeNext()) }
     fun prev() {
@@ -497,7 +528,7 @@ class PlayerState(private val ctx: Context) {
             try {
                 val dur = m.duration
                 val ratio = if (pure) 1f else rpm / 33.3f
-                if (dur > crossfade * 2000 && dur - pos <= crossfade * 1000 * ratio) crossfadeTo(if (repeat) index else computeNext())
+                if (dur > crossfade * 2000 && dur - pos <= crossfade * 1000 * ratio) { val n = if (repeat) index else computeNext(); if (!queue[n].online) crossfadeTo(n) }
             } catch (e: Exception) { }
         }
     }
@@ -506,6 +537,9 @@ class PlayerState(private val ctx: Context) {
 
     fun release() {
         h.removeCallbacks(ticker)
+        try { pending?.release() } catch (e: Exception) { }
+        pending = null
+        loading = false
         try { mp?.release() } catch (e: Exception) { }
         mp = null
         try { fadeOut?.release() } catch (e: Exception) { }
@@ -694,6 +728,7 @@ fun App(st: PlayerState) {
             } else when (tab) {
                 0 -> PlayerTab(st, art, angle)
                 1 -> LibraryTab(st) { tab = 0 }
+                2 -> OnlineTab(st) { tab = 0 }
                 else -> StudioTab(st)
             }
         }
@@ -709,7 +744,7 @@ fun NavBar(tab: Int, onTab: (Int) -> Unit) {
     val v = LocalView.current
     Row(Modifier.fillMaxWidth().shadow(16.dp, RoundedCornerShape(32.dp)).clip(RoundedCornerShape(32.dp))
         .background(Color(0xF0222225)).padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-        listOf("PLAYER", "LIBRARY", "STUDIO").forEachIndexed { i, label ->
+        listOf("PLAYER", "LIBRARY", "ONLINE", "STUDIO").forEachIndexed { i, label ->
             Box(Modifier.weight(1f).clip(RoundedCornerShape(26.dp)).background(if (tab == i) Look.accent else Color.Transparent)
                 .clickable { v.tap(); onTab(i) }.padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
                 Text(label, color = if (tab == i) Color.Black else Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
@@ -770,6 +805,8 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
         Text(song.title.uppercase(), color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
             fontSize = 24.sp, lineHeight = 28.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
         Text(song.artist, color = Color(0xFFAAAAAA), fontSize = 13.sp, maxLines = 1, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
+        if (st.loading) Text("BUFFERING…", color = Look.accent, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+        st.error?.let { Text(it, color = Color(0xFFFF8A80), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) }
         st.quality[song.id]?.let { q ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (q.tag().isNotEmpty()) { Badge(q); Spacer(Modifier.width(8.dp)) }
@@ -802,20 +839,20 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
 
         val dur = maxOf(song.duration, 1)
         Floating(Modifier.fillMaxWidth(), 32.dp) {
-            Slider(value = st.pos.coerceIn(0, dur).toFloat(), onValueChange = {
+            if (song.live) Text("● LIVE RADIO", color = Look.accent, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 14.dp)) else Slider(value = st.pos.coerceIn(0, dur).toFloat(), onValueChange = {
                 val sec = (it / 1000).toInt()
                 if (sec != lastSec) { lastSec = sec; view.tap(HapticFeedbackConstants.CLOCK_TICK) }
                 st.seek(it.toInt())
             }, valueRange = 0f..dur.toFloat(),
                 colors = SliderDefaults.colors(thumbColor = Look.accent, activeTrackColor = Look.accent, inactiveTrackColor = Color(0xFF333336)))
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+            if (!song.live) Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                 Text(fmt(st.pos), color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                 Text(fmt(song.duration), color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
                 val fav = st.isFav(song.id)
-                RoundBtn(46.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(song.id) }) {
+                if (song.online) Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) { Text("WEB", color = Color.Gray, fontSize = 10.sp, fontFamily = FontFamily.Monospace) } else RoundBtn(46.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(song.id) }) {
                     Text(if (fav) "♥" else "♡", color = if (fav) Look.accent else Color.White, fontSize = 20.sp)
                 }
                 RoundBtn(50.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.prev() }) { Icon(3) }
@@ -841,7 +878,7 @@ fun Badge(q: Quality) {
 }
 
 @Composable
-fun SongRow(s: Song, active: Boolean, q: Quality?, onPlay: () -> Unit, onMore: () -> Unit) {
+fun SongRow(s: Song, active: Boolean, q: Quality?, onPlay: () -> Unit, onMore: (() -> Unit)?) {
     val a = rememberArt(s)
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(6.dp, RoundedCornerShape(24.dp)).clip(RoundedCornerShape(24.dp))
         .background(if (active) Color(0xFF28282B) else Panel.copy(alpha = 0.9f)).clickable { onPlay() }.padding(8.dp),
@@ -852,10 +889,10 @@ fun SongRow(s: Song, active: Boolean, q: Quality?, onPlay: () -> Unit, onMore: (
             Text(s.title, color = if (active) Look.accent else Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (q != null && q.tag().isNotEmpty()) { Badge(q); Spacer(Modifier.width(6.dp)) }
-                Text(s.artist + " · " + fmt(s.duration), color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(s.artist + " · " + (if (s.live) "LIVE" else fmt(s.duration)), color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        Box(Modifier.size(40.dp).clip(CircleShape).clickable { onMore() }, contentAlignment = Alignment.Center) {
+        if (onMore != null) Box(Modifier.size(40.dp).clip(CircleShape).clickable { onMore() }, contentAlignment = Alignment.Center) {
             Text("•••", color = Color.Gray, fontSize = 11.sp)
         }
     }
@@ -1062,5 +1099,61 @@ fun StudioTab(st: PlayerState) {
             if (st.sleepAt > 0) Text("Stops in ${((st.sleepAt - st.tick) / 60000 + 1).coerceAtLeast(0)} min", color = Look.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         }
         Spacer(Modifier.height(10.dp))
+    }
+}
+
+
+// ───────────── Online (Audius music + Radio Browser stations) ─────────────
+
+@Composable
+fun OnlineTab(st: PlayerState, openPlayer: () -> Unit) {
+    val view = LocalView.current
+    var mode by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
+    var go by remember { mutableIntStateOf(0) }
+    var results by remember { mutableStateOf(listOf<Song>()) }
+    var busy by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(mode, go) {
+        busy = true; failed = false
+        val q = query.trim()
+        val r = withContext(Dispatchers.IO) { if (mode == 0) Net.music(q) else Net.radio(q) }
+        results = r; failed = r.isEmpty(); busy = false
+    }
+
+    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = 16.dp)) {
+        Floating(Modifier.fillMaxWidth(), 30.dp) {
+            Text("ONLINE", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+            Text(if (mode == 0) "Streaming from Audius" else "Live stations from Radio Browser", color = Color.Gray, fontSize = 11.sp)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("MUSIC", mode == 0) { mode = 0 }
+                Pill("RADIO", mode == 1) { mode = 1 }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BasicTextField(query, { query = it }, singleLine = true,
+                    textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Look.accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { go++ }),
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(Dark).padding(12.dp),
+                    decorationBox = { inner ->
+                        Box {
+                            if (query.isEmpty()) Text(if (mode == 0) "Search tracks or artists…" else "Search stations…", color = Color.Gray, fontSize = 15.sp)
+                            inner()
+                        }
+                    })
+                Pill("GO", true) { go++ }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (busy) Text("Loading…", color = Look.accent, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(12.dp))
+        else if (failed) Text("Nothing found, or no internet connection.", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+        LazyColumn(Modifier.fillMaxSize()) {
+            itemsIndexed(results, key = { _, s -> s.id }) { i, s ->
+                SongRow(s, st.current?.id == s.id, null, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(results, i); openPlayer() }, null)
+            }
+        }
     }
 }

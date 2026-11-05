@@ -101,6 +101,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.roundToInt
@@ -111,6 +112,8 @@ object Look {
     var accent by mutableStateOf(Color(0xFFE9ECEA))
     var style by mutableIntStateOf(0)
     var backdrop by mutableStateOf(true)
+    var gyro by mutableStateOf(true)
+    var gyroInvert by mutableStateOf(false)
 }
 
 val Bodies = listOf(Color(0xFF0E0E0E), Color(0xFF8E1B16), Color(0xFF12233F), Color(0xFF3A3A3A))
@@ -257,6 +260,8 @@ class PlayerState(private val ctx: Context) {
         Look.accent = Color(prefs.getInt("accent", Look.accent.toArgb()))
         Look.style = prefs.getInt("style", 0)
         Look.backdrop = prefs.getBoolean("backdrop", true)
+        Look.gyro = prefs.getBoolean("gyro", true)
+        Look.gyroInvert = prefs.getBoolean("gyroInv", false)
     }
 
     val current: Song? get() = queue.getOrNull(index)
@@ -362,6 +367,8 @@ class PlayerState(private val ctx: Context) {
     // ── look
     fun setAccent(c: Color) { Look.accent = c; prefs.edit().putInt("accent", c.toArgb()).apply() }
     fun setStyle(i: Int) { Look.style = i; prefs.edit().putInt("style", i).apply() }
+    fun updateGyro(b: Boolean) { Look.gyro = b; prefs.edit().putBoolean("gyro", b).apply(); if (b) Tilt.start(ctx) else Tilt.stop() }
+    fun updateGyroInvert(b: Boolean) { Look.gyroInvert = b; prefs.edit().putBoolean("gyroInv", b).apply() }
     fun setBackdrop(b: Boolean) { Look.backdrop = b; prefs.edit().putBoolean("backdrop", b).apply() }
     fun updateShuffle(b: Boolean) { shuffle = b; prefs.edit().putBoolean("shuffle", b).apply() }
     fun updateRepeat(b: Boolean) { repeat = b; prefs.edit().putBoolean("repeat", b).apply() }
@@ -578,6 +585,8 @@ class MainActivity : ComponentActivity() {
         c.hide(WindowInsetsCompat.Type.systemBars())
         setContent { App(st) }
     }
+    override fun onResume() { super.onResume(); if (Look.gyro) Tilt.start(applicationContext) }
+    override fun onPause() { Tilt.stop(); super.onPause() }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
@@ -616,12 +625,24 @@ fun DotText(text: String, dot: Float = 5f, color: Color = Color.White) {
 }
 
 @Composable
-fun Vinyl(dia: Dp, art: ImageBitmap?, angle: Float = 0f) {
+fun Vinyl(dia: Dp, art: ImageBitmap?, angle: Float = 0f, sheen: Boolean = false) {
     Canvas(Modifier.size(dia).graphicsLayer { rotationZ = angle }) {
         val c = center
         val r = this.size.minDimension / 2
         drawCircle(Bodies[Look.style], r, c)
         for (i in 1..16) drawCircle(Color(0x1FFFFFFF), r * (0.58f + i * 0.025f), c, style = Stroke(1f))
+        if (sheen) {
+            // light glints that stay fixed in the room while the record spins and the phone tilts
+            val th = -angle * (PI.toFloat() / 180f)
+            val sx = Tilt.x * cos(th) - Tilt.y * sin(th)
+            val sy = Tilt.x * sin(th) + Tilt.y * cos(th)
+            val mag = minOf(1f, hypot(Tilt.x, Tilt.y))
+            val a = 0.07f + 0.25f * mag
+            val p1 = Offset(c.x + sx * r * 0.7f, c.y + sy * r * 0.7f)
+            val p2 = Offset(c.x - sx * r * 0.7f, c.y - sy * r * 0.7f)
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = a), Color.Transparent), center = p1, radius = r * 0.85f), r, c)
+            drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = a * 0.6f), Color.Transparent), center = p2, radius = r * 0.7f), r, c)
+        }
         val lr = r * 0.56f
         if (art != null) {
             val side = min(art.width, art.height)
@@ -750,7 +771,7 @@ fun App(st: PlayerState) {
 
     val art = rememberArt(st.current)
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Look.accent.copy(alpha = 0.28f).compositeOver(Dark), Dark)))) {
-        if (art != null && Look.backdrop) Image(art, null, Modifier.fillMaxSize().blur(70.dp).alpha(if (Build.VERSION.SDK_INT >= 31) 0.65f else 0.3f), contentScale = ContentScale.Crop)
+        if (art != null && Look.backdrop) Image(art, null, Modifier.fillMaxSize().graphicsLayer { translationX = Tilt.x * -18.dp.toPx(); translationY = Tilt.y * -18.dp.toPx(); scaleX = 1.15f; scaleY = 1.15f }.blur(70.dp).alpha(if (Build.VERSION.SDK_INT >= 31) 0.65f else 0.3f), contentScale = ContentScale.Crop)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).padding(top = 28.dp, bottom = if (imeOn) 0.dp else if (tab == 0) 96.dp else 160.dp)) {
             if (!granted) Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
                 Text("Allow access to your music", color = Color.White, fontSize = 16.sp)
@@ -861,13 +882,17 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
             }) {
             val dia = minOf(maxWidth - 10.dp, maxHeight - 40.dp)
             Box(Modifier.align(Alignment.TopCenter).padding(top = 10.dp)) {
-                if (next2 != null) Box(Modifier.offset(y = 100.dp)) { Vinyl(dia, artN2, 40f) }
-                if (nextSong != null) Box(Modifier.offset(y = 50.dp)) { Vinyl(dia, artN, 110f) }
+                if (next2 != null) Box(Modifier.offset(y = 100.dp).graphicsLayer { translationX = Tilt.x * 56.dp.toPx(); translationY = Tilt.y * 30.dp.toPx() }) { Vinyl(dia, artN2, 40f) }
+                if (nextSong != null) Box(Modifier.offset(y = 50.dp).graphicsLayer { translationX = Tilt.x * 38.dp.toPx(); translationY = Tilt.y * 20.dp.toPx() }) { Vinyl(dia, artN, 110f) }
                 Box(Modifier.graphicsLayer {
-                    translationY = enter.value * 260f
+                    translationY = enter.value * 260f + Tilt.y * 10.dp.toPx()
+                    translationX = Tilt.x * 20.dp.toPx()
+                    rotationY = Tilt.x * 14f
+                    rotationX = -Tilt.y * 14f
+                    cameraDistance = 14f * density
                     alpha = 1f - enter.value * 0.7f
                     val s = 1f - enter.value * 0.12f; scaleX = s; scaleY = s
-                }.plain { view.tap(); st.toggle() }) { Vinyl(dia, art, angle) }
+                }.plain { view.tap(); st.toggle() }) { Vinyl(dia, art, angle, sheen = true) }
             }
         }
 
@@ -1121,6 +1146,11 @@ fun StudioTab(st: PlayerState) {
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Bodies.forEachIndexed { i, c -> Swatch(c, Look.style == i) { st.setStyle(i) } } }
             Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("GYRO TILT", Look.gyro) { st.updateGyro(!Look.gyro) }
+                Pill("INVERT TILT", Look.gyroInvert) { st.updateGyroInvert(!Look.gyroInvert) }
+            }
+            Spacer(Modifier.height(8.dp))
             Pill("ALBUM ART BACKDROP", Look.backdrop) { st.setBackdrop(!Look.backdrop) }
         }
         Section("SLEEP TIMER") {

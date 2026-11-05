@@ -35,17 +35,15 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val SDark = Color(0xFF0B0B0C)
-private val SPanel = Color(0xFF1A1A1C)
-private val SBubble = Color(0x2EFFFFFF)
+private val SBubble = Color(0x12000000)
 
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, hint: String, secret: Boolean = false, modifier: Modifier = Modifier.fillMaxWidth()) {
     BasicTextField(value, onChange, singleLine = true,
-        textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Look.accent),
+        textStyle = TextStyle(color = FG, fontSize = 15.sp), cursorBrush = SolidColor(Look.accent),
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
-        modifier = modifier.clip(RoundedCornerShape(16.dp)).background(Color(0x66000000)).padding(13.dp),
-        decorationBox = { inner -> Box { if (value.isEmpty()) Text(hint, color = Color.Gray, fontSize = 15.sp); inner() } })
+        modifier = modifier.clip(RoundedCornerShape(16.dp)).background(Color(0x0F000000)).padding(13.dp),
+        decorationBox = { inner -> Box { if (value.isEmpty()) Text(hint, color = SUB, fontSize = 15.sp); inner() } })
 }
 
 @Composable
@@ -70,14 +68,14 @@ fun SetupCard(social: Social) {
     var err by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
-            Text("Connect friends", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text("Connect friends", color = FG, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Spacer(Modifier.height(8.dp))
             Text("Friends and chat run on your own free Firebase project:\n" +
                 "1. console.firebase.google.com → create a project\n" +
                 "2. Build → Authentication → enable Email/Password\n" +
                 "3. Build → Realtime Database → create it, then open Rules, paste the rules below and Publish\n" +
                 "4. Copy the Web API Key (Project settings) and the Database URL",
-                color = Color(0xFFBBBBBB), fontSize = 12.sp, lineHeight = 17.sp)
+                color = SUB, fontSize = 12.sp, lineHeight = 17.sp)
             Spacer(Modifier.height(10.dp))
             Pill("COPY DATABASE RULES") {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -112,8 +110,8 @@ fun LoginCard(social: Social) {
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
-            Text("Friends", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 32.sp)
-            Text("Pick a username to add friends and chat.", color = Color.Gray, fontSize = 12.sp)
+            Text("Friends", color = FG, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 32.sp)
+            Text("Pick a username to add friends and chat.", color = SUB, fontSize = 12.sp)
             Spacer(Modifier.height(12.dp))
             Field(u, { u = it }, "Username")
             Spacer(Modifier.height(8.dp))
@@ -145,8 +143,8 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("@${social.me}", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                        Text("${social.friends.size} friends", color = Color.Gray, fontSize = 11.sp)
+                        Text("@${social.me}", color = FG, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Text("${social.friends.size} friends", color = SUB, fontSize = 11.sp)
                     }
                     Pill("SIGN OUT") { social.signOut() }
                 }
@@ -160,39 +158,39 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
             Spacer(Modifier.height(8.dp))
             when (sub) {
                 0 -> {
-                    if (social.friends.isEmpty()) Text("No friends yet. Tap ADD and send a request.", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
+                    if (social.friends.isEmpty()) Text("No friends yet. Tap ADD and send a request.", color = SUB, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(social.friends, key = { it.uid }) { f ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp)
                                 .background(Color.Transparent).clickable { view.tap(); onOpen(f) }.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(46.dp).clip(CircleShape).background(Look.accent), contentAlignment = Alignment.Center) {
-                                    Text(f.name.take(1).uppercase(), color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                    Text(f.name.take(1).uppercase(), color = onAcc(Look.accent), fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text("@${f.name}", color = Color.White, fontSize = 15.sp)
+                                    Text("@${f.name}", color = FG, fontSize = 15.sp)
                                     Text(when {
                                         f.online -> "♪ ${f.nowTitle} — ${f.nowArtist}"
                                         f.lastText.isNotEmpty() -> (if (f.lastFromMe) "You: " else "") + f.lastText
                                         else -> "Tap to chat"
-                                    }, color = if (f.online) Look.accent else Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }, color = if (f.online) Look.accent else SUB, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 if (social.unread(f)) Box(Modifier.size(10.dp).clip(CircleShape).background(Look.accent))
                                 Box(Modifier.size(40.dp).clip(CircleShape).clickable { menu = f }, contentAlignment = Alignment.Center) {
-                                    Text("•••", color = Color.Gray, fontSize = 11.sp)
+                                    Text("•••", color = SUB, fontSize = 11.sp)
                                 }
                             }
                         }
                     }
                 }
                 1 -> {
-                    if (social.requests.isEmpty()) Text("No pending requests.", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
+                    if (social.requests.isEmpty()) Text("No pending requests.", color = SUB, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(social.requests, key = { it.uid }) { r ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp).padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                Text("@${r.name}", color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                Text("@${r.name}", color = FG, fontSize = 15.sp, modifier = Modifier.weight(1f))
                                 Pill("ACCEPT", true) { scope.launch { social.accept(r); social.refreshAll() } }
                                 Spacer(Modifier.width(6.dp))
                                 Pill("✕") { scope.launch { social.decline(r); social.refreshAll() } }
@@ -201,7 +199,7 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
                     }
                 }
                 else -> Floating(Modifier.fillMaxWidth()) {
-                    Text("Add a friend by username", color = Color.White, fontSize = 13.sp)
+                    Text("Add a friend by username", color = FG, fontSize = 13.sp)
                     Spacer(Modifier.height(8.dp))
                     Field(target, { target = it }, "@username")
                     Spacer(Modifier.height(10.dp))
@@ -245,7 +243,7 @@ fun ChatScreen(social: Social, st: PlayerState, f: Friend, onBack: () -> Unit) {
                 Pill("◀ BACK") { onBack() }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("@${f.name}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("@${f.name}", color = FG, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     if (f.online) Text("♪ ${f.nowTitle}", color = Look.accent, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -253,7 +251,7 @@ fun ChatScreen(social: Social, st: PlayerState, f: Friend, onBack: () -> Unit) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp), state = listState) {
             items(msgs, key = { it.id }) { m ->
                 Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Text(m.text, color = if (m.mine) Color.Black else Color.White, fontSize = 14.sp,
+                    Text(m.text, color = if (m.mine) onAcc(Look.accent) else FG, fontSize = 14.sp,
                         modifier = Modifier.widthIn(max = 290.dp).clip(RoundedCornerShape(20.dp))
                             .background(if (m.mine) Look.accent else SBubble).padding(horizontal = 14.dp, vertical = 10.dp))
                 }

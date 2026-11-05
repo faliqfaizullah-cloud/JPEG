@@ -123,11 +123,11 @@ class PlaybackService : Service() {
         val s = st.current
         var bmp: Bitmap? = null
         if (s != null) {
-            if (ArtCache.map.containsKey(s.id)) {
-                bmp = ArtCache.map[s.id]?.asAndroidBitmap()?.let { scaled(it) }
+            if (ArtCache.has(s.id)) {
+                bmp = ArtCache.get(s.id)?.asAndroidBitmap()?.let { scaled(it) }
             } else {
                 scope.launch {
-                    ArtCache.map[s.id] = loadArt(this@PlaybackService, s)
+                    ArtCache.put(s.id, loadArt(this@PlaybackService, s))
                     if (st.current?.id == s.id) refreshUi()
                 }
             }

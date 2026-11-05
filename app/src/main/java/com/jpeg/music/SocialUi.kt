@@ -70,7 +70,7 @@ fun SetupCard(social: Social) {
     var err by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
-            Text("CONNECT FRIENDS", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text("Connect friends", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Spacer(Modifier.height(8.dp))
             Text("Friends and chat run on your own free Firebase project:\n" +
                 "1. console.firebase.google.com → create a project\n" +
@@ -112,7 +112,7 @@ fun LoginCard(social: Social) {
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
-            Text("FRIENDS", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+            Text("Friends", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 32.sp)
             Text("Pick a username to add friends and chat.", color = Color.Gray, fontSize = 12.sp)
             Spacer(Modifier.height(12.dp))
             Field(u, { u = it }, "Username")
@@ -142,10 +142,10 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            Floating(Modifier.fillMaxWidth(), 30.dp) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("@${social.me}", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Text("@${social.me}", color = Color.White, fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Text("${social.friends.size} friends", color = Color.Gray, fontSize = 11.sp)
                     }
                     Pill("SIGN OUT") { social.signOut() }

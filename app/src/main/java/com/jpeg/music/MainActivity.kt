@@ -13,7 +13,12 @@ import android.media.MediaPlayer
 import android.media.PlaybackParams
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
+import android.content.Intent
+import android.media.AudioAttributes
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -85,7 +90,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.roundToInt
 
 // ───────────── Look (customisation state) ─────────────
@@ -332,11 +340,54 @@ class PlayerState(private val ctx: Context) {
     fun updateRepeat(b: Boolean) { repeat = b; prefs.edit().putBoolean("repeat", b).apply() }
 
     // ── playback
+    var onChange: (() -> Unit)? = null
+    var crossfade by mutableIntStateOf(prefs.getInt("cf", 0))
+    private var fadeOut: MediaPlayer? = null
+    private var fadeStart = 0L
+    private var fadeMs = 1L
+    private val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var resumeOnFocus = false
+    private val h = Handler(Looper.getMainLooper())
+    private val ticker = object : Runnable { override fun run() { refresh(); if (playing) h.postDelayed(this, 100) } }
+    private val focus = AudioManager.OnAudioFocusChangeListener { c ->
+        when (c) {
+            AudioManager.AUDIOFOCUS_LOSS -> { resumeOnFocus = false; if (playing) toggle() }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> { if (playing) { resumeOnFocus = true; toggle() } }
+            AudioManager.AUDIOFOCUS_GAIN -> { if (resumeOnFocus) { resumeOnFocus = false; if (!playing) toggle() } }
+            else -> { }
+        }
+    }
+
+    private fun changed() { onChange?.invoke() }
+    fun updateCrossfade(sec: Int) { crossfade = sec; prefs.edit().putInt("cf", sec).apply() }
+
+    private fun ensureService() {
+        if (PlaybackService.running) return
+        try {
+            val i = Intent(ctx, PlaybackService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+        } catch (e: Exception) { }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun focusOn() { try { am.requestAudioFocus(focus, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN) } catch (e: Exception) { } }
+
     private fun applySpeed() {
         val m = mp ?: return
         try { val r = if (pure) 1f else rpm / 33.3f; m.playbackParams = PlaybackParams().setSpeed(r).setPitch(r) } catch (e: Exception) { }
     }
-    fun setSpeed(v: Float) { rpm = v; prefs.edit().putFloat("rpm", v).apply(); if (playing) applySpeed() }
+    fun setSpeed(v: Float) { rpm = v; prefs.edit().putFloat("rpm", v).apply(); if (playing) applySpeed(); changed() }
+
+    private fun newPlayer(s: Song): MediaPlayer {
+        val m = MediaPlayer()
+        m.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+        m.setWakeMode(ctx, PowerManager.PARTIAL_WAKE_LOCK)
+        m.setDataSource(ctx, s.uri)
+        m.setOnCompletionListener { p -> onDone(p) }
+        m.prepare()
+        return m
+    }
+    private fun onDone(p: MediaPlayer) { if (p !== mp) return; if (repeat) play(index) else next() }
 
     fun playQueue(list: List<Song>, i: Int) { if (list.isEmpty()) return; queue = list; play(i) }
 
@@ -345,17 +396,45 @@ class PlayerState(private val ctx: Context) {
         release()
         index = i.coerceIn(0, queue.size - 1)
         try {
-            val m = MediaPlayer()
-            m.setDataSource(ctx, queue[index].uri)
-            m.setOnCompletionListener { if (repeat) play(index) else next() }
-            m.prepare()
+            val m = newPlayer(queue[index])
             attachFx(m.audioSessionId)
+            focusOn()
             m.start()
             mp = m
             playing = true
             pos = 0
             if (rpm != 33.3f) applySpeed()
+            ensureService()
+            h.removeCallbacks(ticker); h.post(ticker)
         } catch (e: Exception) { playing = false }
+        changed()
+    }
+
+    private fun crossfadeTo(n: Int) {
+        try {
+            val old = mp
+            val m = newPlayer(queue[n])
+            m.setVolume(0f, 0f)
+            attachFx(m.audioSessionId)
+            m.start()
+            fadeOut?.let { try { it.release() } catch (e: Exception) { } }
+            old?.setOnCompletionListener(null)
+            fadeOut = old
+            mp = m
+            index = n
+            fadeStart = SystemClock.elapsedRealtime()
+            fadeMs = crossfade * 1000L
+            playing = true
+            pos = 0
+            if (rpm != 33.3f) applySpeed()
+            changed()
+        } catch (e: Exception) { play(n) }
+    }
+
+    private fun finishFade() {
+        fadeOut?.let { try { it.release() } catch (e: Exception) { } }
+        fadeOut = null
+        try { mp?.setVolume(1f, 1f) } catch (e: Exception) { }
     }
 
     fun playNext(s: Song) {
@@ -366,37 +445,79 @@ class PlayerState(private val ctx: Context) {
     fun toggle() {
         val m = mp
         if (m == null) { if (queue.isEmpty()) queue = songs; play(index); return }
-        if (playing) { m.pause(); playing = false } else { m.start(); playing = true; if (rpm != 33.3f) applySpeed() }
+        if (playing) {
+            finishFade()
+            m.pause(); playing = false
+        } else {
+            focusOn(); m.start(); playing = true
+            if (rpm != 33.3f) applySpeed()
+            h.removeCallbacks(ticker); h.post(ticker)
+        }
+        changed()
     }
-    fun stop() { mp?.let { try { it.pause(); it.seekTo(0) } catch (e: Exception) { } }; playing = false; pos = 0 }
 
-    fun next() {
-        if (queue.isEmpty()) return
-        val n = if (shuffle && queue.size > 1) { var r: Int; do { r = queue.indices.random() } while (r == index); r } else (index + 1) % queue.size
-        play(n)
+    fun stop() {
+        finishFade()
+        mp?.let { try { it.pause(); it.seekTo(0) } catch (e: Exception) { } }
+        playing = false; pos = 0
+        changed()
     }
+
+    private fun computeNext(): Int =
+        if (shuffle && queue.size > 1) { var r: Int; do { r = queue.indices.random() } while (r == index); r } else (index + 1) % queue.size
+
+    private fun go(n: Int) { if (crossfade > 0 && playing && mp != null) crossfadeTo(n) else play(n) }
+
+    fun next() { if (queue.isEmpty()) return; go(computeNext()) }
     fun prev() {
         if (queue.isEmpty()) return
         if (pos > 3000) { seek(0); return }
-        play((index - 1 + queue.size) % queue.size)
+        go((index - 1 + queue.size) % queue.size)
     }
-    fun seek(ms: Int) { try { mp?.seekTo(ms); pos = ms } catch (e: Exception) { } }
+
+    fun seek(ms: Int) { try { mp?.seekTo(ms); pos = ms } catch (e: Exception) { }; changed() }
 
     fun refresh() {
         tick = SystemClock.elapsedRealtime()
-        if (sleepAt > 0 && tick >= sleepAt) { sleepAt = 0; mp?.let { try { it.pause() } catch (e: Exception) { } }; playing = false }
+        if (sleepAt > 0 && tick >= sleepAt) {
+            sleepAt = 0; finishFade()
+            mp?.let { try { it.pause() } catch (e: Exception) { } }
+            playing = false; changed()
+        }
         val m = mp ?: return
-        if (playing) try { pos = m.currentPosition } catch (e: Exception) { }
+        if (!playing) return
+        try { pos = m.currentPosition } catch (e: Exception) { return }
+        val f = fadeOut
+        if (f != null) {
+            val t = ((tick - fadeStart) / fadeMs.toFloat()).coerceIn(0f, 1f)
+            val vo = cos(t * PI / 2).toFloat(); val vn = sin(t * PI / 2).toFloat()
+            try { f.setVolume(vo, vo); m.setVolume(vn, vn) } catch (e: Exception) { }
+            if (t >= 1f) finishFade()
+        } else if (crossfade > 0 && queue.isNotEmpty()) {
+            try {
+                val dur = m.duration
+                val ratio = if (pure) 1f else rpm / 33.3f
+                if (dur > crossfade * 2000 && dur - pos <= crossfade * 1000 * ratio) crossfadeTo(if (repeat) index else computeNext())
+            } catch (e: Exception) { }
+        }
     }
+
     fun setSleep(min: Int) { sleepAt = if (min == 0) 0L else SystemClock.elapsedRealtime() + min * 60_000L }
 
-    fun release() { try { mp?.release() } catch (e: Exception) { }; mp = null; releaseFx() }
+    fun release() {
+        h.removeCallbacks(ticker)
+        try { mp?.release() } catch (e: Exception) { }
+        mp = null
+        try { fadeOut?.release() } catch (e: Exception) { }
+        fadeOut = null
+        releaseFx()
+    }
 }
 
 // ───────────── Activity ─────────────
 
 class MainActivity : ComponentActivity() {
-    private val st by lazy { PlayerState(applicationContext) }
+    private val st by lazy { Engine.get(applicationContext) }
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -411,7 +532,6 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
     }
-    override fun onDestroy() { st.release(); super.onDestroy() }
 }
 
 // ───────────── Shared UI bits ─────────────
@@ -546,6 +666,11 @@ fun App(st: PlayerState) {
 
     LaunchedEffect(Unit) { if (!granted) launcher.launch(perm) }
     LaunchedEffect(granted) { if (granted) st.scan() }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(granted) {
+        if (granted && Build.VERSION.SDK_INT >= 33 && ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
     LaunchedEffect(st.songs) { st.analyzeAll() }
     LaunchedEffect(Unit) { while (true) { delay(150); st.refresh() } }
     LaunchedEffect(st.playing) {
@@ -864,6 +989,17 @@ fun StudioTab(st: PlayerState) {
                 Pill("REPEAT ONE", st.repeat) { st.updateRepeat(!st.repeat) }
                 Pill("RESCAN") { scope.launch { st.scan() } }
             }
+            Spacer(Modifier.height(14.dp))
+            Text("Crossfade", color = Color.White, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("OFF", st.crossfade == 0) { st.updateCrossfade(0) }
+                Pill("3 SEC", st.crossfade == 3) { st.updateCrossfade(3) }
+                Pill("6 SEC", st.crossfade == 6) { st.updateCrossfade(6) }
+                Pill("10 SEC", st.crossfade == 10) { st.updateCrossfade(10) }
+            }
+            Text("Blends the end of each song into the next, including when you skip.", color = Color.Gray, fontSize = 11.sp,
+                modifier = Modifier.padding(top = 8.dp))
         }
         Section("AUDIO QUALITY") {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager

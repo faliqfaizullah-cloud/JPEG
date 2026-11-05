@@ -22,7 +22,6 @@ import android.os.PowerManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
-import android.util.Size
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.WindowManager
@@ -221,7 +220,7 @@ suspend fun loadArt(ctx: Context, s: Song): ImageBitmap? = withContext(Dispatche
                 if (bmp != null) return@withContext bmp.asImageBitmap()
             }
         } finally { r.release() }
-        if (Build.VERSION.SDK_INT >= 29) ctx.contentResolver.loadThumbnail(s.uri, Size(600, 600), null).asImageBitmap() else null
+        if (Build.VERSION.SDK_INT >= 29) ctx.contentResolver.loadThumbnail(s.uri, android.util.Size(600, 600), null).asImageBitmap() else null
     } catch (e: Exception) { null }
 }
 

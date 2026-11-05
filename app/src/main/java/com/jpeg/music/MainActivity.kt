@@ -43,6 +43,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -240,6 +245,8 @@ class PlayerState(private val ctx: Context) {
     val quality = mutableStateMapOf<Long, Quality>()
     var pure by mutableStateOf(prefs.getBoolean("pure", false))
     var loading by mutableStateOf(false)
+    var showLyrics by mutableStateOf(false)
+    var lyric by mutableStateOf<LyricData?>(null)
     var error by mutableStateOf<String?>(null)
     private var pending: MediaPlayer? = null
     private var mp: MediaPlayer? = null
@@ -302,6 +309,14 @@ class PlayerState(private val ctx: Context) {
         if (queue.isEmpty()) queue = list
         if (index >= queue.size) index = 0
     }
+
+    // ── lyrics
+    suspend fun loadLyrics(s: Song) {
+        if (s.live || lyric?.songId == s.id) return
+        val d = Lyrics.load(ctx, s)
+        if (current?.id == s.id) lyric = d
+    }
+    fun retryLyrics(s: Song) { Lyrics.forget(ctx, s.id); lyric = null }
 
     // ── quality
     suspend fun ensureQ(s: Song) {
@@ -641,7 +656,7 @@ fun Icon(kind: Int, tint: Color = Color.White, sz: Dp = 22.dp) {
 @Composable
 fun Pill(t: String, selected: Boolean = false, onClick: () -> Unit) {
     val v = LocalView.current
-    Box(Modifier.clip(RoundedCornerShape(50)).background(if (selected) Look.accent else Color(0xFF2A2A2D))
+    Box(Modifier.clip(RoundedCornerShape(50)).background(if (selected) Look.accent else Color(0x2EFFFFFF))
         .clickable { v.tap(); onClick() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
         Text(t, color = if (selected) Color.Black else Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
     }
@@ -652,10 +667,17 @@ fun RoundBtn(size: Dp, bg: Color, onClick: () -> Unit, content: @Composable () -
     Box(Modifier.size(size).clip(CircleShape).background(bg).clickable { onClick() }, contentAlignment = Alignment.Center) { content() }
 }
 
+fun Modifier.frost(radius: Dp = 28.dp): Modifier {
+    val shape = RoundedCornerShape(radius)
+    return this.clip(shape)
+        .background(Color(0x4D000000))
+        .background(Brush.verticalGradient(listOf(Color(0x33FFFFFF), Color(0x12FFFFFF))))
+        .border(1.dp, Brush.verticalGradient(listOf(Color(0x66FFFFFF), Color(0x14FFFFFF))), shape)
+}
+
 @Composable
 fun Floating(modifier: Modifier = Modifier, radius: Dp = 28.dp, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.shadow(14.dp, RoundedCornerShape(radius)).clip(RoundedCornerShape(radius))
-        .background(Panel.copy(alpha = 0.88f)).padding(16.dp), content = content)
+    Column(modifier.frost(radius).padding(16.dp), content = content)
 }
 
 @Composable
@@ -681,7 +703,7 @@ fun NameDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             BasicTextField(text, { text = it.take(24).filter { c -> c != '\t' && c != '\n' } },
                 textStyle = TextStyle(color = Color.White, fontSize = 18.sp), cursorBrush = SolidColor(Look.accent), singleLine = true,
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Dark).padding(14.dp))
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0x66000000)).padding(14.dp))
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Pill("CANCEL") { onDismiss() }; Pill("CREATE", true) { onCreate(text); onDismiss() } }
         }
@@ -727,8 +749,8 @@ fun App(st: PlayerState) {
     }
 
     val art = rememberArt(st.current)
-    Box(Modifier.fillMaxSize().background(Dark)) {
-        if (art != null && Look.backdrop) Image(art, null, Modifier.fillMaxSize().blur(50.dp).alpha(0.35f), contentScale = ContentScale.Crop)
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Look.accent.copy(alpha = 0.28f).compositeOver(Dark), Dark)))) {
+        if (art != null && Look.backdrop) Image(art, null, Modifier.fillMaxSize().blur(70.dp).alpha(if (Build.VERSION.SDK_INT >= 31) 0.65f else 0.3f), contentScale = ContentScale.Crop)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).padding(top = 28.dp, bottom = if (imeOn) 0.dp else if (tab == 0) 96.dp else 160.dp)) {
             if (!granted) Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
                 Text("Allow access to your music", color = Color.White, fontSize = 16.sp)
@@ -752,8 +774,7 @@ fun App(st: PlayerState) {
 @Composable
 fun NavBar(tab: Int, onTab: (Int) -> Unit) {
     val v = LocalView.current
-    Row(Modifier.fillMaxWidth().shadow(16.dp, RoundedCornerShape(32.dp)).clip(RoundedCornerShape(32.dp))
-        .background(Color(0xF0222225)).padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+    Row(Modifier.fillMaxWidth().frost(32.dp).padding(6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
         listOf("PLAYER", "LIBRARY", "ONLINE", "FRIENDS", "STUDIO").forEachIndexed { i, label ->
             Box(Modifier.weight(1f).clip(RoundedCornerShape(26.dp)).background(if (tab == i) Look.accent else Color.Transparent)
                 .clickable { v.tap(); onTab(i) }.padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
@@ -767,8 +788,7 @@ fun NavBar(tab: Int, onTab: (Int) -> Unit) {
 fun MiniPlayer(st: PlayerState, art: ImageBitmap?, angle: Float, open: () -> Unit) {
     val v = LocalView.current
     val s = st.current ?: return
-    Row(Modifier.fillMaxWidth().shadow(16.dp, RoundedCornerShape(30.dp)).clip(RoundedCornerShape(30.dp))
-        .background(Color(0xF0222225)).clickable { open() }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().frost(30.dp).clickable { open() }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
         Vinyl(46.dp, art, angle)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -796,6 +816,7 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
     LaunchedEffect(st.index, st.queue.size) { enter.snapTo(1f); enter.animateTo(0f, spring(0.62f, Spring.StiffnessLow)) }
     var lastSec by remember { mutableIntStateOf(0) }
     LaunchedEffect(song?.id) { song?.let { st.ensureQ(it) } }
+    LaunchedEffect(song?.id, st.showLyrics, st.lyric == null) { if (st.showLyrics) song?.let { st.loadLyrics(it) } }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Floating(Modifier.fillMaxWidth(), 30.dp) {
@@ -814,7 +835,10 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
         Spacer(Modifier.height(10.dp))
         Text(song.title.uppercase(), color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
             fontSize = 24.sp, lineHeight = 28.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
-        Text(song.artist, color = Color(0xFFAAAAAA), fontSize = 13.sp, maxLines = 1, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(song.artist, color = Color(0xFFAAAAAA), fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f))
+            if (!song.live) Pill("LYRICS", st.showLyrics) { st.showLyrics = !st.showLyrics }
+        }
         if (st.loading) Text("BUFFERING…", color = Look.accent, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
         st.error?.let { Text(it, color = Color(0xFFFF8A80), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) }
         st.quality[song.id]?.let { q ->
@@ -824,7 +848,7 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
             }
         }
 
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds()
+        if (st.showLyrics && !song.live) LyricsPanel(st, Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp)) else BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds()
             .pointerInput(st) {
                 var total = 0f
                 detectVerticalDragGestures(
@@ -862,13 +886,13 @@ fun PlayerTab(st: PlayerState, art: ImageBitmap?, angle: Float) {
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
                 val fav = st.isFav(song.id)
-                if (song.online) Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) { Text("WEB", color = Color.Gray, fontSize = 10.sp, fontFamily = FontFamily.Monospace) } else RoundBtn(46.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(song.id) }) {
+                if (song.online) Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) { Text("WEB", color = Color.Gray, fontSize = 10.sp, fontFamily = FontFamily.Monospace) } else RoundBtn(46.dp, Color(0x2EFFFFFF), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(song.id) }) {
                     Text(if (fav) "♥" else "♡", color = if (fav) Look.accent else Color.White, fontSize = 20.sp)
                 }
-                RoundBtn(50.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.prev() }) { Icon(3) }
+                RoundBtn(50.dp, Color(0x2EFFFFFF), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.prev() }) { Icon(3) }
                 RoundBtn(68.dp, Look.accent, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggle() }) { Icon(if (st.playing) 1 else 0, Color.Black, 26.dp) }
-                RoundBtn(50.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.next() }) { Icon(2) }
-                RoundBtn(46.dp, if (st.shuffle) Look.accent else Color(0xFF2A2A2D), { view.tap(); st.updateShuffle(!st.shuffle) }) {
+                RoundBtn(50.dp, Color(0x2EFFFFFF), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.next() }) { Icon(2) }
+                RoundBtn(46.dp, if (st.shuffle) Look.accent else Color(0x2EFFFFFF), { view.tap(); st.updateShuffle(!st.shuffle) }) {
                     Text("SH", color = if (st.shuffle) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 }
             }
@@ -890,8 +914,8 @@ fun Badge(q: Quality) {
 @Composable
 fun SongRow(s: Song, active: Boolean, q: Quality?, onPlay: () -> Unit, onMore: (() -> Unit)?) {
     val a = rememberArt(s)
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(6.dp, RoundedCornerShape(24.dp)).clip(RoundedCornerShape(24.dp))
-        .background(if (active) Color(0xFF28282B) else Panel.copy(alpha = 0.9f)).clickable { onPlay() }.padding(8.dp),
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp)
+        .background(if (active) Look.accent.copy(alpha = 0.2f) else Color.Transparent).clickable { onPlay() }.padding(8.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Vinyl(50.dp, a)
         Spacer(Modifier.width(12.dp))
@@ -956,8 +980,8 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
                     itemsIndexed(st.playlists.keys.toList(), key = { _, k -> k }) { _, name ->
                         val list = st.songsOf(name)
                         val a = rememberArt(list.firstOrNull())
-                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(6.dp, RoundedCornerShape(24.dp)).clip(RoundedCornerShape(24.dp))
-                            .background(Panel.copy(alpha = 0.9f)).clickable { view.tap(); openPl = name }.padding(10.dp),
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp)
+                            .background(Color.Transparent).clickable { view.tap(); openPl = name }.padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Vinyl(56.dp, a)
                             Spacer(Modifier.width(12.dp))
@@ -968,7 +992,7 @@ fun LibraryTab(st: PlayerState, openPlayer: () -> Unit) {
                             RoundBtn(40.dp, Look.accent, { if (list.isNotEmpty()) { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(list, 0); openPlayer() } }) { Icon(0, Color.Black, 16.dp) }
                             if (name != FAV) {
                                 Spacer(Modifier.width(6.dp))
-                                RoundBtn(40.dp, Color(0xFF2A2A2D), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.deletePl(name) }) { Text("✕", color = Color.White, fontSize = 13.sp) }
+                                RoundBtn(40.dp, Color(0x2EFFFFFF), { view.tap(HapticFeedbackConstants.LONG_PRESS); st.deletePl(name) }) { Text("✕", color = Color.White, fontSize = 13.sp) }
                             }
                         }
                     }
@@ -1020,7 +1044,7 @@ fun StudioTab(st: PlayerState) {
     val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Section("SPEED") {
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Dark).padding(vertical = 22.dp), horizontalArrangement = Arrangement.Center) {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0x66000000)).padding(vertical = 22.dp), horizontalArrangement = Arrangement.Center) {
                 DotText(if (st.rpm < 40f) "33.3" else "45.0", 7f, Look.accent)
             }
             Spacer(Modifier.height(12.dp))
@@ -1147,7 +1171,7 @@ fun OnlineTab(st: PlayerState, openPlayer: () -> Unit) {
                     textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Look.accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { go++ }),
-                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(Dark).padding(12.dp),
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(Color(0x66000000)).padding(12.dp),
                     decorationBox = { inner ->
                         Box {
                             if (query.isEmpty()) Text(if (mode == 0) "Search tracks or artists…" else "Search stations…", color = Color.Gray, fontSize = 15.sp)
@@ -1163,6 +1187,42 @@ fun OnlineTab(st: PlayerState, openPlayer: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize()) {
             itemsIndexed(results, key = { _, s -> s.id }) { i, s ->
                 SongRow(s, st.current?.id == s.id, null, { view.tap(HapticFeedbackConstants.LONG_PRESS); st.playQueue(results, i); openPlayer() }, null)
+            }
+        }
+    }
+}
+
+
+// ───────────── Lyrics ─────────────
+
+@Composable
+fun LyricsPanel(st: PlayerState, modifier: Modifier) {
+    val view = LocalView.current
+    val song = st.current ?: return
+    val d = st.lyric?.takeIf { it.songId == song.id }
+    val listState = rememberLazyListState()
+    val idx = if (d != null && d.synced.isNotEmpty()) d.synced.indexOfLast { it.ms <= st.pos + 150 } else -1
+    LaunchedEffect(idx) { if (idx >= 0) listState.animateScrollToItem(maxOf(idx - 2, 0)) }
+    Box(modifier.frost(32.dp), contentAlignment = Alignment.Center) {
+        when {
+            d == null -> Text("Searching lyrics…", color = Look.accent, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            d.empty -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("No lyrics found", color = Color.White, fontSize = 15.sp)
+                Text("Needs internet. Matches by title, artist and length.", color = Color.Gray, fontSize = 11.sp,
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(12.dp))
+                Pill("RETRY") { st.retryLyrics(song) }
+            }
+            d.synced.isNotEmpty() -> LazyColumn(Modifier.fillMaxSize(), state = listState,
+                contentPadding = PaddingValues(vertical = 60.dp, horizontal = 20.dp)) {
+                itemsIndexed(d.synced) { i, line ->
+                    val col by animateColorAsState(if (i == idx) Look.accent else Color(0x88FFFFFF))
+                    Text(line.text.ifBlank { "♪" }, color = col, fontSize = if (i == idx) 24.sp else 19.sp, fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center, lineHeight = 28.sp,
+                        modifier = Modifier.fillMaxWidth().plain { view.tap(); st.seek(line.ms.toInt()) }.padding(vertical = 9.dp))
+                }
+            }
+            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp)) {
+                item { Text(d.plain, color = Color.White, fontSize = 17.sp, lineHeight = 26.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
             }
         }
     }

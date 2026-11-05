@@ -95,4 +95,48 @@ object Net {
         }
         return emptyList()
     }
+
+    private fun jstr(j: JSONObject, k: String): String = if (j.isNull(k)) "" else j.optString(k)
+
+    /** LRCLIB community lyrics database. Returns (synced, plain, serverReached). */
+    fun lyricsFor(s: Song): Triple<String, String, Boolean> {
+        if (s.live) return Triple("", "", false)
+        val dur = s.duration / 1000
+        val artist = if (s.artist.startsWith("Unknown")) "" else s.artist
+        fun enc(x: String) = URLEncoder.encode(x, "UTF-8")
+        var reached = false
+        if (artist.isNotBlank() && s.album.isNotBlank() && dur > 0) {
+            try {
+                val c = open("https://lrclib.net/api/get?track_name=${enc(s.title)}&artist_name=${enc(artist)}&album_name=${enc(s.album)}&duration=$dur")
+                val code = c.responseCode
+                if (code == 200) {
+                    val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                    val sy = jstr(j, "syncedLyrics"); val pl = jstr(j, "plainLyrics")
+                    if (sy.isNotBlank() || pl.isNotBlank()) return Triple(sy, pl, true)
+                    reached = true
+                } else if (code == 404) reached = true
+            } catch (e: Exception) { }
+        }
+        try {
+            val q = "https://lrclib.net/api/search?track_name=${enc(s.title)}" + (if (artist.isNotBlank()) "&artist_name=${enc(artist)}" else "")
+            val c = open(q)
+            if (c.responseCode == 200) {
+                reached = true
+                val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+                var best: JSONObject? = null
+                var bestScore = Int.MAX_VALUE
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val sy = jstr(o, "syncedLyrics"); val pl = jstr(o, "plainLyrics")
+                    if (sy.isBlank() && pl.isBlank()) continue
+                    val diff = if (dur > 0) abs(o.optInt("duration", 0) - dur) else 0
+                    if (dur > 0 && diff > 8) continue
+                    val score = diff + (if (sy.isBlank()) 20 else 0)
+                    if (score < bestScore) { bestScore = score; best = o }
+                }
+                best?.let { return Triple(jstr(it, "syncedLyrics"), jstr(it, "plainLyrics"), true) }
+            }
+        } catch (e: Exception) { }
+        return Triple("", "", reached)
+    }
 }

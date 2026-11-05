@@ -37,14 +37,14 @@ import kotlinx.coroutines.launch
 
 private val SDark = Color(0xFF0B0B0C)
 private val SPanel = Color(0xFF1A1A1C)
-private val SBubble = Color(0xFF2A2A2D)
+private val SBubble = Color(0x2EFFFFFF)
 
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, hint: String, secret: Boolean = false, modifier: Modifier = Modifier.fillMaxWidth()) {
     BasicTextField(value, onChange, singleLine = true,
         textStyle = TextStyle(color = Color.White, fontSize = 15.sp), cursorBrush = SolidColor(Look.accent),
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
-        modifier = modifier.clip(RoundedCornerShape(16.dp)).background(SDark).padding(13.dp),
+        modifier = modifier.clip(RoundedCornerShape(16.dp)).background(Color(0x66000000)).padding(13.dp),
         decorationBox = { inner -> Box { if (value.isEmpty()) Text(hint, color = Color.Gray, fontSize = 15.sp); inner() } })
 }
 
@@ -163,8 +163,8 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
                     if (social.friends.isEmpty()) Text("No friends yet. Tap ADD and send a request.", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(social.friends, key = { it.uid }) { f ->
-                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(6.dp, RoundedCornerShape(24.dp)).clip(RoundedCornerShape(24.dp))
-                                .background(SPanel.copy(alpha = 0.9f)).clickable { view.tap(); onOpen(f) }.padding(12.dp),
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp)
+                                .background(Color.Transparent).clickable { view.tap(); onOpen(f) }.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(46.dp).clip(CircleShape).background(Look.accent), contentAlignment = Alignment.Center) {
                                     Text(f.name.take(1).uppercase(), color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -190,7 +190,7 @@ fun FriendList(social: Social, onOpen: (Friend) -> Unit) {
                     if (social.requests.isEmpty()) Text("No pending requests.", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(social.requests, key = { it.uid }) { r ->
-                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(24.dp)).background(SPanel.copy(alpha = 0.9f)).padding(12.dp),
+                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).frost(24.dp).padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Text("@${r.name}", color = Color.White, fontSize = 15.sp, modifier = Modifier.weight(1f))
                                 Pill("ACCEPT", true) { scope.launch { social.accept(r); social.refreshAll() } }

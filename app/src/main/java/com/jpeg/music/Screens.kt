@@ -79,6 +79,15 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -229,7 +238,9 @@ fun App(st: PlayerState) {
     }
 
     val art = rememberArt(st.current)
+    val backdrop = rememberBackdrop()
     Box(Modifier.fillMaxSize()) {
+      Box(Modifier.fillMaxSize().backdropSource(backdrop)) {
         AppBackground()
         if (!granted) {
             Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
@@ -256,6 +267,8 @@ fun App(st: PlayerState) {
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(210.dp)
                 .background(Brush.verticalGradient(listOf(Bg.copy(alpha = 0f), Bg))))
         }
+      }
+      CompositionLocalProvider(LocalBackdrop provides backdrop) {
         if (!imeOn) {
             TopBar(onStack = { settingsVisible = true }, onCrate = { tab = 2 })
             Column(Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 18.dp)) {
@@ -263,6 +276,7 @@ fun App(st: PlayerState) {
                 TabBar(tab) { tab = it }
             }
         }
+      }
 
         AnimatedVisibility(settingsVisible, enter = fadeIn(tween(200)) + slideInVertically(tween(260)) { it / 8 },
             exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { it / 8 }) {
@@ -607,12 +621,45 @@ fun ReleaseSheet(st: PlayerState, album: Album, angle: Float, onClose: () -> Uni
     var out by remember { mutableStateOf(false) }
     val p = animateFloatAsState(if (out) 1f else 0f, spring(0.6f, 110f), label = "pull")
     val art = rememberArt(album.tracks.firstOrNull())
+    val backdrop = rememberBackdrop()
     LaunchedEffect(cur?.id, st.showLyrics, st.lyric == null) { if (st.showLyrics) cur?.let { st.loadLyrics(it) } }
 
     Box(Modifier.fillMaxSize()) {
-        AppBackground()
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).windowInsetsPadding(WindowInsets.displayCutout).padding(top = 34.dp)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.fillMaxSize().backdropSource(backdrop)) {
+            AppBackground()
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).windowInsetsPadding(WindowInsets.displayCutout).padding(top = 34.dp)) {
+                Spacer(Modifier.height(46.dp))
+                BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+                    val sIn = maxWidth * 0.78f
+                    val stageH = sIn + 20.dp
+                    if (st.showLyrics && cur != null && !cur.live) LyricsPanel(st, Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(stageH))
+                    else RecordStage(art, p, angle, maxWidth, sIn, stageH, onToggle = { out = !out }, onSwipe = { right -> out = right })
+                }
+                TrackTable(st, album)
+                val total = album.tracks.map { it.duration }.sum()
+                val year = album.tracks.firstOrNull()?.year ?: 0
+                Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 30.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Cover(art, Modifier.size(66.dp).clip(RoundedCornerShape(4.dp)))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(album.artist, color = FG, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(album.title, color = SUB, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text((if (year > 0) "$year · " else "") + "${album.tracks.size} tracks · ${total / 60000} min", color = FAINT, fontSize = 12.sp)
+                    }
+                    if (cur != null && !cur.online) {
+                        val fav = st.isFav(cur.id)
+                        Box(Modifier.size(44.dp).bounce { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(cur.id) }, contentAlignment = Alignment.Center) {
+                            Ic(if (fav) IC_HEART else IC_HEARTO, 26.dp, FG)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(150.dp))
+            }
+        }
+        CompositionLocalProvider(LocalBackdrop provides backdrop) {
+            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(110.dp).background(Brush.verticalGradient(listOf(Bg, Bg.copy(alpha = 0f)))))
+            Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.displayCutout).padding(start = 16.dp, end = 16.dp, top = 34.dp).align(Alignment.TopCenter),
+                verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(46.dp).bounce { view.tap(); onClose() }.glass(23.dp, 0.7f), contentAlignment = Alignment.Center) { Ic(IC_CLOSE, 22.dp, FG) }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(head?.title ?: album.title, color = FG, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -620,34 +667,9 @@ fun ReleaseSheet(st: PlayerState, album: Album, angle: Float, onClose: () -> Uni
                 }
                 Box(Modifier.size(46.dp).bounce { view.tap(); st.showLyrics = !st.showLyrics }, contentAlignment = Alignment.Center) { Crate(38.dp) }
             }
-            BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 18.dp)) {
-                val sIn = maxWidth * 0.78f
-                val stageH = sIn + 20.dp
-                if (st.showLyrics && cur != null && !cur.live) LyricsPanel(st, Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(stageH))
-                else RecordStage(art, p, angle, maxWidth, sIn, stageH, onToggle = { out = !out }, onSwipe = { right -> out = right })
-            }
-            TrackTable(st, album)
-            val total = album.tracks.map { it.duration }.sum()
-            val year = album.tracks.firstOrNull()?.year ?: 0
-            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 30.dp), verticalAlignment = Alignment.CenterVertically) {
-                Cover(art, Modifier.size(66.dp).clip(RoundedCornerShape(4.dp)))
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(album.artist, color = FG, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(album.title, color = SUB, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text((if (year > 0) "$year · " else "") + "${album.tracks.size} tracks · ${total / 60000} min", color = FAINT, fontSize = 12.sp)
-                }
-                if (cur != null && !cur.online) {
-                    val fav = st.isFav(cur.id)
-                    Box(Modifier.size(44.dp).bounce { view.tap(HapticFeedbackConstants.LONG_PRESS); st.toggleFav(cur.id) }, contentAlignment = Alignment.Center) {
-                        Ic(if (fav) IC_HEART else IC_HEARTO, 26.dp, FG)
-                    }
-                }
-            }
-            Spacer(Modifier.height(150.dp))
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(130.dp).background(Brush.verticalGradient(listOf(Bg.copy(alpha = 0f), Bg))))
+            WavePill(st, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 18.dp))
         }
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(130.dp).background(Brush.verticalGradient(listOf(Bg.copy(alpha = 0f), Bg))))
-        WavePill(st, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 18.dp))
     }
 }
 

@@ -79,6 +79,15 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -217,6 +226,23 @@ fun StudioTab(st: PlayerState) {
     val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Text("Studio", color = FG, fontSize = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+        Section("Glass style") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("DEFAULT", Look.glassStyle == 0) { st.updateGlassStyle(0) }
+                Pill("FROSTED", Look.glassStyle == 1) { st.updateGlassStyle(1) }
+                Pill("LIQUID", Look.glassStyle == 2) { st.updateGlassStyle(2) }
+            }
+            if (Look.glassStyle != 0) {
+                Spacer(Modifier.height(8.dp))
+                GlassSlider("Blur", Look.glassBlur, 0f..60f, "dp") { st.updateGlass(0, it) }
+                GlassSlider("Tint", Look.glassTint * 100f, 0f..90f, "%") { st.updateGlass(1, it / 100f) }
+                GlassSlider("Border", Look.glassBorder * 100f, 0f..100f, "%") { st.updateGlass(2, it / 100f) }
+                GlassSlider("Shadow", Look.glassShadow * 100f, 0f..50f, "%") { st.updateGlass(3, it / 100f) }
+                Text("Blur behind the bars needs Android 12 or newer. Older phones keep the tint, rim light and shadow.", color = SUB, fontSize = 11.sp)
+                Spacer(Modifier.height(8.dp))
+                Pill("RESET THIS STYLE") { st.updateGlassStyle(Look.glassStyle) }
+            }
+        }
         Section("Appearance") {
             Text("Accent colour", color = FG, fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
@@ -404,5 +430,16 @@ fun LyricsPanel(st: PlayerState, modifier: Modifier) {
                 item { Text(d.plain, color = FG, fontSize = 17.sp, lineHeight = 26.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
             }
         }
+    }
+}
+
+
+@Composable
+fun GlassSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, unit: String, onChange: (Float) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = FG, fontSize = 12.sp, modifier = Modifier.width(56.dp))
+        Slider(value, onChange, modifier = Modifier.weight(1f), valueRange = range,
+            colors = SliderDefaults.colors(thumbColor = Look.accent, activeTrackColor = Look.accent, inactiveTrackColor = Color(0x1F000000)))
+        Text("${value.roundToInt()}$unit", color = SUB, fontSize = 11.sp, textAlign = TextAlign.End, modifier = Modifier.width(48.dp))
     }
 }

@@ -79,6 +79,15 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -163,14 +172,107 @@ fun Modifier.bounce(onClick: () -> Unit): Modifier {
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
 
-/** Frosted white glass: translucent white, bright rim and a soft shadow. */
-fun Modifier.glass(radius: Dp = 28.dp, alpha: Float = 0.74f): Modifier {
-    val shape = RoundedCornerShape(radius)
-    return this.shadow(12.dp, shape, false, Color(0x14000000), Color(0x26000000))
+/** The layer a backdrop-blurred glass element looks at. Only elements drawn OUTSIDE the source can use it. */
+class Backdrop(val layer: GraphicsLayer) { var origin by mutableStateOf(Offset.Zero) }
+val LocalBackdrop = compositionLocalOf<Backdrop?> { null }
+
+@Composable
+fun rememberBackdrop(): Backdrop {
+    val l = rememberGraphicsLayer()
+    return remember(l) { Backdrop(l) }
+}
+
+/** Marks a region as the content that glass overlays blur. Records the region into a layer and still draws it normally. */
+fun Modifier.backdropSource(b: Backdrop): Modifier =
+    this.onGloballyPositioned { b.origin = it.positionInRoot() }
+        .drawWithContent {
+            b.layer.record { this@drawWithContent.drawContent() }
+            drawLayer(b.layer)
+        }
+
+@androidx.annotation.RequiresApi(31)
+fun glassEffect(radiusPx: Float, sat: Float): androidx.compose.ui.graphics.RenderEffect {
+    val blur = android.graphics.RenderEffect.createBlurEffect(radiusPx, radiusPx, android.graphics.Shader.TileMode.CLAMP)
+    val cm = android.graphics.ColorMatrix().apply { setSaturation(sat) }
+    return android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(cm), blur).asComposeRenderEffect()
+}
+
+private fun Modifier.plainGlass(shape: Shape, alpha: Float): Modifier =
+    this.shadow(12.dp, shape, false, Color(0x14000000), Color(0x26000000))
         .clip(shape)
         .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = minOf(1f, alpha + 0.14f)), Color.White.copy(alpha = alpha - 0.06f))))
         .border(1.dp, Brush.verticalGradient(listOf(Color.White, Color(0x66FFFFFF))), shape)
+
+/**
+ * Glass surface. Style 0 is the default look. Style 1 (frosted) and 2 (liquid) are options chosen in Settings:
+ * real backdrop blur (Android 12+), tint, rim light, specular highlights and shadow, all adjustable.
+ */
+@Composable
+fun Modifier.glass(radius: Dp = 28.dp, alpha: Float = 0.74f): Modifier {
+    val shape = RoundedCornerShape(radius)
+    val style = Look.glassStyle
+    if (style == 0) return plainGlass(shape, alpha)
+    val liquid = style == 2
+    val backdrop = LocalBackdrop.current
+    val blurLayer = rememberGraphicsLayer()
+    var here by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
+    val blurPx = with(density) { Look.glassBlur.dp.toPx() } * (if (liquid) 1.2f else 1f)
+    val effect = remember(blurPx, liquid) {
+        if (Build.VERSION.SDK_INT >= 31 && blurPx > 0.5f) glassEffect(blurPx, if (liquid) 1.9f else 1.5f) else null
+    }
+    val tint = Look.glassTint
+    val border = Look.glassBorder
+    val sh = Look.glassShadow
+    val rad = with(density) { radius.toPx() }
+    return this
+        .shadow(if (liquid) 18.dp else 12.dp, shape, false,
+            Color.Black.copy(alpha = (sh * 0.5f).coerceIn(0f, 1f)), Color.Black.copy(alpha = (sh * 1.1f).coerceIn(0f, 1f)))
+        .clip(shape)
+        .onGloballyPositioned { here = it.positionInRoot() }
+        .drawBehind {
+            if (backdrop != null && effect != null && backdrop.layer.size.width > 0) {
+                blurLayer.apply {
+                    record(size = backdrop.layer.size) { drawLayer(backdrop.layer) }
+                    renderEffect = effect
+                }
+                val o = here - backdrop.origin
+                translate(-o.x, -o.y) { drawLayer(blurLayer) }
+            }
+        }
+        .background(Brush.verticalGradient(listOf(
+            Color.White.copy(alpha = (tint + 0.12f).coerceIn(0f, 1f)), Color.White.copy(alpha = (tint - 0.1f).coerceIn(0f, 1f)))))
+        .border(1.dp, Brush.verticalGradient(listOf(
+            Color.White.copy(alpha = border.coerceIn(0f, 1f)), Color.White.copy(alpha = (border * 0.45f).coerceIn(0f, 1f)))), shape)
+        .drawWithContent {
+            drawContent()
+            val w = this.size.width
+            val h = this.size.height
+            val r = minOf(rad, h / 2f)
+            if (liquid) {
+                // glossy highlight band
+                drawRoundRect(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.55f), Color.Transparent), startY = h * 0.05f, endY = h * 0.45f),
+                    topLeft = Offset(w * 0.07f, h * 0.05f), size = Size(w * 0.86f, h * 0.38f), cornerRadius = CornerRadius(h * 0.2f))
+                // diagonal rim light
+                drawRoundRect(Brush.linearGradient(
+                    0f to Color.White.copy(alpha = (border + 0.25f).coerceIn(0f, 1f)),
+                    0.36f to Color.White.copy(alpha = 0.06f),
+                    0.64f to Color.White.copy(alpha = 0.06f),
+                    1f to Color.White.copy(alpha = border.coerceIn(0f, 1f)),
+                    start = Offset.Zero, end = Offset(w, h)), cornerRadius = CornerRadius(r), style = Stroke(2.5f))
+                // chromatic edge fringe
+                drawRoundRect(Brush.horizontalGradient(listOf(Color(0x33FF78C8), Color.Transparent), startX = 0f, endX = w * 0.14f), cornerRadius = CornerRadius(r))
+                drawRoundRect(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x3378C8FF)), startX = w * 0.86f, endX = w), cornerRadius = CornerRadius(r))
+                // bottom bounce light
+                drawRoundRect(Brush.verticalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.24f)), startY = h * 0.6f, endY = h), cornerRadius = CornerRadius(r))
+                // top specular line
+                drawRoundRect(Color.White.copy(alpha = 0.85f), topLeft = Offset(r * 0.6f, 1.5f), size = Size(maxOf(1f, w - r * 1.2f), 2.5f), cornerRadius = CornerRadius(2f))
+            } else {
+                drawRoundRect(Color.White.copy(alpha = 0.8f), topLeft = Offset(r * 0.5f, 1f), size = Size(maxOf(1f, w - r), 1.5f), cornerRadius = CornerRadius(1f))
+            }
+        }
 }
+@Composable
 fun Modifier.frost(radius: Dp = 28.dp): Modifier = glass(radius)
 
 @Composable

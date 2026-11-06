@@ -125,6 +125,11 @@ object Look {
     var backdrop by mutableStateOf(true)
     var gyro by mutableStateOf(true)
     var gyroInvert by mutableStateOf(false)
+    var glassStyle by mutableIntStateOf(0)       // 0 default, 1 frosted, 2 liquid
+    var glassBlur by mutableFloatStateOf(24f)
+    var glassTint by mutableFloatStateOf(0.55f)
+    var glassBorder by mutableFloatStateOf(0.7f)
+    var glassShadow by mutableFloatStateOf(0.18f)
 }
 
 val Bodies = listOf(Color(0xFF0E0E0E), Color(0xFF8E1B16), Color(0xFF12233F), Color(0xFF3A3A3A))
@@ -285,6 +290,11 @@ class PlayerState(private val ctx: Context) {
         Look.backdrop = prefs.getBoolean("backdrop", true)
         Look.gyro = prefs.getBoolean("gyro", true)
         Look.gyroInvert = prefs.getBoolean("gyroInv", false)
+        Look.glassStyle = prefs.getInt("gs", 0)
+        Look.glassBlur = prefs.getFloat("gb", 24f)
+        Look.glassTint = prefs.getFloat("gt", 0.55f)
+        Look.glassBorder = prefs.getFloat("gbd", 0.7f)
+        Look.glassShadow = prefs.getFloat("gsh", 0.18f)
     }
 
     val current: Song? get() = queue.getOrNull(index)
@@ -401,6 +411,23 @@ class PlayerState(private val ctx: Context) {
     // ── look
     fun setAccent(c: Color) { Look.accent = c; prefs.edit().putInt("accent2", c.toArgb()).apply() }
     fun setStyle(i: Int) { Look.style = i; prefs.edit().putInt("style", i).apply() }
+    private fun saveGlass() {
+        prefs.edit().putFloat("gb", Look.glassBlur).putFloat("gt", Look.glassTint)
+            .putFloat("gbd", Look.glassBorder).putFloat("gsh", Look.glassShadow).apply()
+    }
+    fun updateGlassStyle(i: Int) {
+        Look.glassStyle = i
+        when (i) {
+            1 -> { Look.glassBlur = 24f; Look.glassTint = 0.55f; Look.glassBorder = 0.7f; Look.glassShadow = 0.18f }
+            2 -> { Look.glassBlur = 18f; Look.glassTint = 0.32f; Look.glassBorder = 0.85f; Look.glassShadow = 0.22f }
+        }
+        prefs.edit().putInt("gs", i).apply()
+        saveGlass()
+    }
+    fun updateGlass(which: Int, v: Float) {
+        when (which) { 0 -> Look.glassBlur = v; 1 -> Look.glassTint = v; 2 -> Look.glassBorder = v; else -> Look.glassShadow = v }
+        saveGlass()
+    }
     fun updateGyro(b: Boolean) { Look.gyro = b; prefs.edit().putBoolean("gyro", b).apply(); if (b) Tilt.start(ctx) else Tilt.stop() }
     fun updateGyroInvert(b: Boolean) { Look.gyroInvert = b; prefs.edit().putBoolean("gyroInv", b).apply() }
     fun setBackdrop(b: Boolean) { Look.backdrop = b; prefs.edit().putBoolean("backdrop", b).apply() }

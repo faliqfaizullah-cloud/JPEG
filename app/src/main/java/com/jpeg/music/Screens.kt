@@ -632,8 +632,7 @@ fun ReleaseSheet(st: PlayerState, album: Album, angle: Float, onClose: () -> Uni
                 BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 18.dp)) {
                     val sIn = maxWidth * 0.78f
                     val stageH = sIn + 20.dp
-                    if (st.showLyrics && cur != null && !cur.live) LyricsPanel(st, Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(stageH))
-                    else RecordStage(art, p, angle, maxWidth, sIn, stageH, onToggle = { out = !out }, onSwipe = { right -> out = right })
+                    RecordStage(art, p, angle, maxWidth, sIn, stageH, onToggle = { out = !out }, onSwipe = { right -> out = right })
                 }
                 TrackTable(st, album)
                 val total = album.tracks.map { it.duration }.sum()
@@ -670,6 +669,7 @@ fun ReleaseSheet(st: PlayerState, album: Album, angle: Float, onClose: () -> Uni
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(130.dp).background(Brush.verticalGradient(listOf(Bg.copy(alpha = 0f), Bg))))
             WavePill(st, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 18.dp))
         }
+        if (st.showLyrics && cur != null) LyricScene(st) { st.showLyrics = false }
     }
 }
 

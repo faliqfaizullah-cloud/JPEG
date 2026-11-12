@@ -398,42 +398,6 @@ fun OnlineTab(st: PlayerState, openPlayer: () -> Unit) {
 }
 
 
-// ───────────── Lyrics ─────────────
-
-@Composable
-fun LyricsPanel(st: PlayerState, modifier: Modifier) {
-    val view = LocalView.current
-    val song = st.current ?: return
-    val d = st.lyric?.takeIf { it.songId == song.id }
-    val listState = rememberLazyListState()
-    val idx = if (d != null && d.synced.isNotEmpty()) d.synced.indexOfLast { it.ms <= st.pos + 150 } else -1
-    LaunchedEffect(idx) { if (idx >= 0) listState.animateScrollToItem(maxOf(idx - 2, 0)) }
-    Box(modifier.frost(32.dp), contentAlignment = Alignment.Center) {
-        when {
-            d == null -> Text("Searching lyrics…", color = Look.accent, fontFamily = FontFamily.Default, fontSize = 13.sp)
-            d.empty -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("No lyrics found", color = FG, fontSize = 15.sp)
-                Text("Needs internet. Matches by title, artist and length.", color = SUB, fontSize = 11.sp,
-                    textAlign = TextAlign.Center, modifier = Modifier.padding(12.dp))
-                Pill("RETRY") { st.retryLyrics(song) }
-            }
-            d.synced.isNotEmpty() -> LazyColumn(Modifier.fillMaxSize(), state = listState,
-                contentPadding = PaddingValues(vertical = 60.dp, horizontal = 20.dp)) {
-                itemsIndexed(d.synced) { i, line ->
-                    val col by animateColorAsState(if (i == idx) FG else Color(0xFFBDBDC2))
-                    Text(line.text.ifBlank { "♪" }, color = col, fontSize = if (i == idx) 24.sp else 19.sp, fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center, lineHeight = 28.sp,
-                        modifier = Modifier.fillMaxWidth().plain { view.tap(); st.seek(line.ms.toInt()) }.padding(vertical = 9.dp))
-                }
-            }
-            else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp)) {
-                item { Text(d.plain, color = FG, fontSize = 17.sp, lineHeight = 26.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
-            }
-        }
-    }
-}
-
-
 @Composable
 fun GlassSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, unit: String, onChange: (Float) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {

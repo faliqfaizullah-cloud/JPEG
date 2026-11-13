@@ -1,0 +1,28 @@
+{
+  "name": "jpeg-music",
+  "productName": "JPEG",
+  "version": "1.0.0",
+  "description": "JPEG music player for Windows",
+  "main": "main.js",
+  "author": "faliqfaizullah-cloud",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis portable --publish never"
+  },
+  "dependencies": {
+    "music-metadata": "7.14.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.jpeg.music.windows",
+    "productName": "JPEG",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "renderer/**/*", "package.json"],
+    "win": { "target": ["nsis", "portable"], "icon": "build/icon.ico" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false }
+  }
+}
